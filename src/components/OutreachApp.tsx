@@ -396,20 +396,43 @@ export default function App(){
   const saveToAirtable=async()=>{
     const toSave=Object.values(scraped)
     if(!toSave.length){toast('Nothing scraped yet','w');return}
-    addLog(`Saving ${toSave.length} leads...`,'i')
+    addLog(`Saving ${toSave.length} leads with contact enrichment...`,'i')
     let ok=0
     for(const d of toSave){
       try{
+        const fields: Record<string,any> = {
+          [F.COMPANY]:d.company,
+          [F.WEBSITE]:d.website||'',
+          [F.GH_URL]:d.githubOrgUrl,
+          [F.STARS]:d.githubStars,
+          [F.TYPE]:d.companyType,
+          [F.AI_TOOLS]:d.aiTools,
+          [F.STATUS]:'New',
+          [F.SOURCE]:'GitHub Scrape',
+          [F.ADDED]:new Date().toISOString().split('T')[0],
+          [F.NOTES]:d.description||'',
+        }
+        // Include enriched contact if found
+        if(d.contactName) fields[F.CONTACT] = d.contactName
+        if(d.contactEmail) fields[F.EMAIL] = d.contactEmail
+        if(d.contactTitle) fields[F.TITLE] = d.contactTitle + (d.contactConfidence==='inferred'?' (inferred)':' (verified)')
+
         const r=await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'create',fields:{[F.COMPANY]:d.company,[F.WEBSITE]:d.website||'',[F.GH_URL]:d.githubOrgUrl,[F.STARS]:d.githubStars,[F.TYPE]:d.companyType,[F.AI_TOOLS]:d.aiTools,[F.STATUS]:'New',[F.SOURCE]:'GitHub Scrape',[F.ADDED]:new Date().toISOString().split('T')[0],[F.NOTES]:d.description||''}})
-        }).then(r=>r.json())
-        if(r.ok){ok++;addLog(`  ✓ ${d.company}`,'o')}
+          body:JSON.stringify({action:'create',fields})}).then(r=>r.json())
+        if(r.ok){
+          ok++
+          const emailNote = d.contactEmail
+            ? ` · ${d.contactConfidence==='verified'?'✓':'~'} ${d.contactEmail}`
+            : ' · no email found'
+          addLog(`  ✓ ${d.company}${emailNote}`,'o')
+        }
         else addLog(`  ✗ ${d.company}: ${r.error}`,'e')
       }catch(e:any){addLog(`  ✗ ${e.message}`,'e')}
       await new Promise(r=>setTimeout(r,200))
     }
-    addLog(`Saved ${ok}/${toSave.length}`,ok===toSave.length?'o':'w')
-    toast(`${ok} leads saved to CRM`,ok>0?'o':'e')
+    const withEmail = Object.values(scraped).filter((d:any)=>d.contactEmail).length
+    addLog(`Saved ${ok}/${toSave.length} — ${withEmail} with emails (${Object.values(scraped).filter((d:any)=>d.contactConfidence==='verified').length} verified, ${Object.values(scraped).filter((d:any)=>d.contactConfidence==='inferred').length} inferred)`,ok===toSave.length?'o':'w')
+    toast(`${ok} leads saved · ${withEmail} emails found`,ok>0?'o':'e')
     await loadLeads(true)
   }
 
@@ -730,7 +753,13 @@ export default function App(){
                       {d?<>
                         <div className="sstar">⭐ {d.githubStars?.toLocaleString()}</div>
                         <div className="srepo">{d.topRepos}</div>
-                        <div className="sst" style={{color:'var(--green)'}}>✓ ready to save</div>
+                        {d.contactEmail ? (
+                          <div className="sst" style={{color:d.contactConfidence==='verified'?'var(--green)':'var(--yellow)'}}>
+                            {d.contactConfidence==='verified'?'✓ ':'\~ '}{d.contactEmail}
+                          </div>
+                        ) : (
+                          <div className="sst" style={{color:'var(--ink4)'}}>no email found</div>
+                        )}
                       </>:(
                         <div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
                           {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
@@ -782,7 +811,13 @@ export default function App(){
                           <td><input type="checkbox" className="ck" checked={sel.has(lead.id)} onChange={e=>{const s=new Set(sel);e.target.checked?s.add(lead.id):s.delete(lead.id);setSel(s)}}/></td>
                           <td><strong>{lead.company}</strong></td>
                           <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.companyType}</span></td>
-                          <td>{lead.contactEmail?<span style={{fontFamily:'var(--mono)',fontSize:11}}>{lead.contactEmail}</span>:<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>Add in Airtable →</span>}</td>
+                          <td>{lead.contactEmail?(
+                                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                                  <span style={{fontFamily:'var(--mono)',fontSize:11}}>{lead.contactEmail}</span>
+                                  {lead.jobTitle?.includes('(verified)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--green)',background:'#16a34a10',padding:'1px 5px',borderRadius:3}}>verified</span>}
+                                  {lead.jobTitle?.includes('(inferred)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--yellow)',background:'#d9770610',padding:'1px 5px',borderRadius:3}}>inferred</span>}
+                                </div>
+                              ):<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>Add in Airtable →</span>}</td>
                           <td><span className={`pill ${lead.status==='Email Sent'?'ps':lead.status==='Replied'?'pr':lead.status==='Booked Call'?'pb2':'pn'}`}>{lead.status||'New'}</span></td>
                           <td><span style={{color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:10}}>{lead.aiTools||'—'}</span></td>
                           <td>{lead.emailBody?<span style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:10}}>✓</span>:<span style={{color:'var(--ink4)',fontSize:10}}>—</span>}</td>

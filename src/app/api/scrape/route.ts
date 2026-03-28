@@ -53,9 +53,11 @@ export async function GET(req: NextRequest) {
   if (!target) return NextResponse.json({ ok: false, error: 'Org not found' }, { status: 404 })
 
   try {
-    const [orgData, repos] = await Promise.all([
+    const website = target.web
+    const [orgData, repos, members] = await Promise.all([
       ghFetch(`/orgs/${org}`, token || undefined),
       ghFetch(`/orgs/${org}/repos?sort=stars&per_page=5`, token || undefined),
+      ghFetch(`/orgs/${org}/members?per_page=20`, token || undefined).catch(() => []),
     ])
     const stars = repos.reduce((s: number, r: any) => s + (r.stargazers_count || 0), 0)
     const topRepos = repos.slice(0, 3).map((r: any) => r.name).join(', ')
@@ -63,6 +65,82 @@ export async function GET(req: NextRequest) {
     const aiTools = Array.from(new Set(topics.filter((t: string) =>
       ['ai', 'llm', 'agent', 'ml', 'gpt', 'claude', 'langchain', 'openai'].some(k => t.includes(k))
     ))).slice(0, 5).join(', ')
+
+    // ── Email enrichment ─────────────────────────────────────────────────────
+    // Try to extract domain from website
+    let domain: string | null = null
+    try {
+      const u = new URL(website.startsWith('http') ? website : `https://${website}`)
+      domain = u.hostname.replace(/^www\./, '')
+    } catch { /* no domain */ }
+
+    // Priority roles for scoring
+    const PRIORITY = ['cto','co-founder','cofounder','founder','vp engineering','vp of engineering','head of engineering','ceo','chief technology','chief executive']
+    const scoreBio = (bio: string) => PRIORITY.filter(r => (bio||'').toLowerCase().includes(r)).length
+
+    const emailPatterns = (first: string, last: string, dom: string) => {
+      const f = first.toLowerCase().replace(/[^a-z]/g, '')
+      const l = last.toLowerCase().replace(/[^a-z]/g, '')
+      if (!f || !dom) return []
+      const pats = [`${f}@${dom}`]
+      if (l) pats.push(`${f}.${l}@${dom}`, `${f}${l}@${dom}`, `${f[0]}${l}@${dom}`, `${f[0]}.${l}@${dom}`)
+      return pats
+    }
+
+    // Enrich top 10 members in parallel
+    let bestContact: { name: string; email: string; confidence: string; title: string; githubUrl: string } | null = null
+
+    if (members && members.length > 0) {
+      const profiles = await Promise.all(
+        (members as any[]).slice(0, 10).map(async (m: any) => {
+          const p = await ghFetch(`/users/${m.login}`, token || undefined).catch(() => null)
+          if (!p) return null
+          const nameParts = (p.name || m.login).trim().split(/\s+/)
+          const first = nameParts[0] || ''
+          const last = nameParts.slice(1).join(' ') || ''
+          const verifiedEmail = p.email?.includes('@') ? p.email : null
+          const inferredEmails = domain ? emailPatterns(first, last, domain) : []
+          return {
+            login: m.login,
+            name: p.name || m.login,
+            bio: p.bio || '',
+            bioScore: scoreBio(p.bio || ''),
+            followers: p.followers || 0,
+            githubUrl: p.html_url,
+            verifiedEmail,
+            inferredEmails,
+            primaryEmail: verifiedEmail || inferredEmails[0] || null,
+            emailConfidence: verifiedEmail ? 'verified' : inferredEmails.length ? 'inferred' : null,
+          }
+        })
+      )
+
+      const valid = profiles
+        .filter(Boolean)
+        .sort((a: any, b: any) => (b.bioScore - a.bioScore) || (b.followers - a.followers))
+
+      const top = valid[0]
+      if (top?.primaryEmail) {
+        bestContact = {
+          name: top.name,
+          email: top.primaryEmail,
+          confidence: top.emailConfidence || 'inferred',
+          title: top.bio?.split('\n')[0]?.slice(0, 80) || '',
+          githubUrl: top.githubUrl,
+        }
+      }
+    }
+
+    // Fallback: org-level email
+    if (!bestContact && orgData.email) {
+      bestContact = {
+        name: orgData.name || org,
+        email: orgData.email,
+        confidence: 'verified',
+        title: 'Organization contact',
+        githubUrl: `https://github.com/${org}`,
+      }
+    }
 
     return NextResponse.json({
       ok: true,
@@ -75,6 +153,12 @@ export async function GET(req: NextRequest) {
         companyType: target.type,
         topRepos,
         aiTools: aiTools || 'AI/ML tooling',
+        // Enriched contact
+        contactName: bestContact?.name || null,
+        contactEmail: bestContact?.email || null,
+        contactTitle: bestContact?.title || null,
+        contactConfidence: bestContact?.confidence || null,
+        contactGithub: bestContact?.githubUrl || null,
       }
     })
   } catch (e: any) {
