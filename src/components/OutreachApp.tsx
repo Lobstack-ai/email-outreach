@@ -1,23 +1,8 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
 
-const F = {
-  COMPANY:'fldw3U1aoS6SoFWm4', CONTACT:'fldcnT6Jr61hnqqnv',
-  EMAIL:'fldQeb1rQjWmoxkA5',   TITLE:'fldDsy1HSJr5dFbal',
-  TYPE:'fldDQlh5FhkLQPcHU',    STATUS:'fldnpr8ffpRMdRhrm',
-  GH_URL:'flde6D0qEzgE2TQqg',  WEBSITE:'fldoKw9zV0qMsn9en',
-  STARS:'fldMGcyW0bC3oKqN7',   AI_TOOLS:'fldXEZGaOSum0w2X9',
-  NOTES:'fldSjec95F5g3psKl',   SUBJ:'fldgXC37R2fztZwvz',
-  BODY:'fldSRXPILbk5XX0on',    ADDED:'fldoCWwQs23CWqlDH',
-  CONTACTED:'fldug7dtHgFP41y71', FOLLOWUP:'fldnLEqy8IZlqJNSE',
-  SOURCE:'fldTlfl2errtmqEdT',
-}
-const LF = {
-  CAMPID:'fldzJGFePGwhCe8Nd', COMPANY:'fldbWOIVtdNZ2dIZ7',
-  EMAIL:'fldf2j9bFzl7yesh7',  SUBJECT:'fldIMDxiF1q8SNzKy',
-  STEP:'fldbb7EYkZ3JIjOEj',   SENTAT:'fldYLFGNnC6PLsIRP',
-  MSGID:'fldyHyHAu2aAHJXza',  RESULT:'fldoPu5TMdiVwNmDT',
-}
+// Field IDs kept for reference only — writes now use field names (typecast:true)
+// Reads use field names directly since Airtable REST API returns fields by name
 
 const TARGETS = [
   {org:'e2b-dev',name:'E2B',type:'Dev Tools'},
@@ -46,9 +31,31 @@ type Lead={id:string;company:string;contactName:string;contactEmail:string;jobTi
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
 function mapRecord(r:any):Lead{
-  const f=r.fields||{}
-  const g=(id:string)=>{const v=f[id];if(!v)return '';if(typeof v==='object'&&'name' in v)return v.name;return String(v)}
-  return{id:r.id,company:g(F.COMPANY),contactName:g(F.CONTACT),contactEmail:g(F.EMAIL),jobTitle:g(F.TITLE),companyType:g(F.TYPE),status:g(F.STATUS)||'New',githubOrgUrl:g(F.GH_URL),website:g(F.WEBSITE),aiTools:g(F.AI_TOOLS),notes:g(F.NOTES),emailSubject:g(F.SUBJ),emailBody:g(F.BODY),source:g(F.SOURCE)}
+  // Airtable REST API returns fields keyed by NAME (not field ID)
+  const f = r.fields || {}
+  const g = (name:string, fallback='') => {
+    const v = f[name]
+    if (v === undefined || v === null) return fallback
+    if (typeof v === 'object' && 'name' in v) return v.name  // singleSelect
+    if (typeof v === 'object' && 'state' in v) return fallback  // AI field error
+    return String(v)
+  }
+  return {
+    id: r.id,
+    company:      g('Company'),
+    contactName:  g('Contact Name'),
+    contactEmail: g('Contact Email'),
+    jobTitle:     g('Job Title'),
+    companyType:  g('Company Type'),
+    status:       g('Status', 'New'),
+    githubOrgUrl: g('GitHub Org URL'),
+    website:      g('Website'),
+    aiTools:      g('AI Tools Used'),
+    notes:        g('Personalization Notes'),
+    emailSubject: g('Email Subject'),
+    emailBody:    g('Email Body'),
+    source:       g('Source'),
+  }
 }
 
 const CSS=`
@@ -401,21 +408,21 @@ export default function App(){
     for(const d of toSave){
       try{
         const fields: Record<string,any> = {
-          [F.COMPANY]:d.company,
-          [F.WEBSITE]:d.website||'',
-          [F.GH_URL]:d.githubOrgUrl,
-          [F.STARS]:d.githubStars,
-          [F.TYPE]:d.companyType,
-          [F.AI_TOOLS]:d.aiTools,
-          [F.STATUS]:'New',
-          [F.SOURCE]:'GitHub Scrape',
-          [F.ADDED]:new Date().toISOString().split('T')[0],
-          [F.NOTES]:d.description||'',
+          "Company":d.company,
+          "Website":d.website||'',
+          "GitHub Org URL":d.githubOrgUrl,
+          "GitHub Stars":d.githubStars,
+          "Company Type":d.companyType,
+          "AI Tools Used":d.aiTools,
+          "Status":'New',
+          "Source":'GitHub Scrape',
+          "Date Added":new Date().toISOString().split('T')[0],
+          "Personalization Notes":d.description||'',
         }
         // Include enriched contact if found
-        if(d.contactName) fields[F.CONTACT] = d.contactName
-        if(d.contactEmail) fields[F.EMAIL] = d.contactEmail
-        if(d.contactTitle) fields[F.TITLE] = d.contactTitle + (d.contactConfidence==='inferred'?' (inferred)':' (verified)')
+        if(d.contactName) fields['Contact Name'] = d.contactName
+        if(d.contactEmail) fields['Contact Email'] = d.contactEmail
+        if(d.contactTitle) fields['Job Title'] = d.contactTitle + (d.contactConfidence==='inferred'?' (inferred)':' (verified)')
 
         const r=await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({action:'create',fields})}).then(r=>r.json())
@@ -449,7 +456,7 @@ export default function App(){
           body:JSON.stringify({lead,senderName:'The Lobstack Team'})}).then(r=>r.json())
         if(!r.ok)throw new Error(r.error)
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'update',recordId:lead.id,fields:{[F.SUBJ]:r.subject,[F.BODY]:r.body}})})
+          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Email Subject":r.subject,"Email Body":r.body}})})
         setLeads(p=>p.map(l=>l.id===lead.id?{...l,emailSubject:r.subject,emailBody:r.body}:l))
         addLog(`  ✓ "${r.subject}"`,'o')
       }catch(e:any){addLog(`  ✗ ${lead.company}: ${e.message}`,'e')}
@@ -479,9 +486,9 @@ export default function App(){
           msgId=r.messageId
         }
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'update',recordId:lead.id,fields:{[F.STATUS]:'Email Sent',[F.CONTACTED]:new Date().toISOString().split('T')[0],[F.FOLLOWUP]:1}})})
+          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Status":'Email Sent',"Last Contacted":new Date().toISOString().split('T')[0],"Follow Up #":1}})})
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'log',fields:{[LF.CAMPID]:`CAM-${Date.now()}`,[LF.COMPANY]:lead.company,[LF.EMAIL]:lead.contactEmail,[LF.SUBJECT]:lead.emailSubject,[LF.STEP]:'Cold Email #1',[LF.SENTAT]:new Date().toISOString(),[LF.MSGID]:msgId,[LF.RESULT]:'Sent'}})})
+          body:JSON.stringify({action:'log',fields:{"Campaign ID":`CAM-${Date.now()}`,"Company":lead.company,"Contact Email":lead.contactEmail,"Subject":lead.emailSubject,"Sequence Step":'Cold Email #1',"Sent At":new Date().toISOString(),"Message ID":msgId,"Result":'Sent'}})})
         setLeads(p=>p.map(l=>l.id===lead.id?{...l,status:'Email Sent'}:l))
         addLog(`  ✓ Sent to ${lead.company}`,'o')
       }catch(e:any){addLog(`  ✗ ${lead.company}: ${e.message}`,'e')}
