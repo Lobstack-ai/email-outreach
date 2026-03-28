@@ -11,7 +11,7 @@ const TARGETS = [
   { org: 'crewaiinc',      name: 'CrewAI',        type: 'AI/ML Startup',          web: 'https://crewai.com' },
   { org: 'langgenius',     name: 'Dify.AI',       type: 'AI/ML Startup',          web: 'https://dify.ai' },
   { org: 'mendableai',     name: 'Mendable',      type: 'AI/ML Startup',          web: 'https://mendable.ai' },
-  { org: 'flowise-ai',     name: 'Flowiseai',     type: 'AI/ML Startup',          web: 'https://flowiseai.com' },
+  { org: 'FlowiseAI',     name: 'Flowiseai',     type: 'AI/ML Startup',          web: 'https://flowiseai.com' },
   { org: 'phidatahq',      name: 'Phidata',       type: 'AI/ML Startup',          web: 'https://phidata.com' },
   { org: 'superagent-ai',  name: 'Superagent',    type: 'AI/ML Startup',          web: 'https://superagent.sh' },
   { org: 'replicate',      name: 'Replicate',     type: 'AI/ML Startup',          web: 'https://replicate.com' },

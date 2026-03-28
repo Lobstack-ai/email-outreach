@@ -30,7 +30,7 @@ const TARGETS = [
   {org:'crewaiinc',name:'CrewAI',type:'AI Startup'},
   {org:'langgenius',name:'Dify.AI',type:'AI Startup'},
   {org:'mendableai',name:'Mendable',type:'AI Startup'},
-  {org:'flowise-ai',name:'Flowiseai',type:'AI Startup'},
+  {org:'FlowiseAI',name:'Flowiseai',type:'AI Startup'},
   {org:'phidatahq',name:'Phidata',type:'AI Startup'},
   {org:'superagent-ai',name:'Superagent',type:'AI Startup'},
   {org:'replicate',name:'Replicate',type:'AI Startup'},
