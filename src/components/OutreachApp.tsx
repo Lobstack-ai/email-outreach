@@ -669,22 +669,6 @@ export default function App(){
             <div className="brand-tag">Outreach</div>
           </div>
           <div className="topbar-r">
-            <div className="flex gap8 ic">
-              <div className={`chip ${hl?'':health?.airtable?.ok?'ok':health?.airtable?.ok===false?'err':''}`}>
-                <div className={`dot ${dotCls(health?.airtable?.ok,hl)}`}/>
-                Airtable
-                {health?.airtable?.ok&&<strong>{health.airtable.leadsCount} leads</strong>}
-              </div>
-              <div className={`chip ${hl?'':health?.smtp?.ok?'ok':health?.smtp?.ok===false&&health?.env?.smtpEmail?'err':''}`}>
-                <div className={`dot ${dotCls(health?.smtp?.ok,hl)}`}/>
-                PrivateEmail
-              </div>
-              <div className={`chip ${health?.github?.ok?'ok':''}`}>
-                <div className={`dot ${health?.github?.ok?'ok':''}`}/>
-                GitHub
-                {health?.github?.remaining!=null&&<strong>{health.github.remaining}/hr</strong>}
-              </div>
-            </div>
             <button className="btn btn-ghost btn-xs" onClick={checkHealth} disabled={hl}>{hl?'…':'↻ Refresh'}</button>
           </div>
         </div>
