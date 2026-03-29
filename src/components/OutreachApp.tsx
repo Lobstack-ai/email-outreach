@@ -976,9 +976,9 @@ export default function App(){
             {(()=>{
               const sortFn=(a:any,b:any)=>{
                 if(filterSortBy==='stars')   return (b.stars||0)-(a.stars||0)
-                if(filterSortBy==='forks')   return (b.forks||0)-(a.forks||0)
-                if(filterSortBy==='members') return (b.members||0)-(a.members||0)
-                if(filterSortBy==='watchers')return (b.watchers||0)-(a.watchers||0)
+                if(filterSortBy==='forks')   return (scraped[b.org]?.githubForks||0)-(scraped[a.org]?.githubForks||0)
+                if(filterSortBy==='members') return (scraped[b.org]?.orgMembers||0)-(scraped[a.org]?.orgMembers||0)
+                if(filterSortBy==='watchers')return (scraped[b.org]?.githubWatchers||0)-(scraped[a.org]?.githubWatchers||0)
                 // default: score — use scraped data if available, else stars as proxy
                 const scoreA = scraped[a.org]?.leadScore ?? a.stars ?? 0
                 const scoreB = scraped[b.org]?.leadScore ?? b.stars ?? 0
@@ -986,12 +986,15 @@ export default function App(){
               }
               const filtered = discovered
                 .filter(o=>{
+                  const enriched = scraped[o.org]
+                  // For unenriched orgs, only apply star filter (the only pre-enrichment signal)
+                  // Skip member/fork/score filters until enriched — don't hide cards user hasn't seen yet
                   if(filterMinStars>0&&(o.stars||0)<filterMinStars) return false
-                  if(filterMinForks>0&&(o.forks||0)<filterMinForks) return false
-                  if(filterMinMembers>0&&(o.members||0)<filterMinMembers) return false
-                  const score = scraped[o.org]?.leadScore ?? 0
-                  if(filterMinScore>0&&score<filterMinScore) return false
-                  if(filterShowHasEmail&&!scraped[o.org]?.contactEmail) return false
+                  if(!enriched) return true  // show unenriched orgs unless star filter blocks them
+                  if(filterMinForks>0&&(enriched.githubForks||0)<filterMinForks) return false
+                  if(filterMinMembers>0&&(enriched.orgMembers||0)<filterMinMembers) return false
+                  if(filterMinScore>0&&(enriched.leadScore||0)<filterMinScore) return false
+                  if(filterShowHasEmail&&!enriched.contactEmail) return false
                   return true
                 })
                 .sort(sortFn)
