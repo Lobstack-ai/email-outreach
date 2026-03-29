@@ -783,7 +783,7 @@ export default function App(){
             <div className="agrid mb24">
               {[
                 {ico:'↻',lbl:'Refresh Systems',sub:'Re-ping all integrations and reload leads',act:checkHealth,dis:hl,prime:false},
-                {ico:'⭐',lbl:'Scrape GitHub',sub:`Pull data from ${TARGETS.length} AI-forward companies`,act:()=>setTab('scrape'),dis:false,prime:false},
+                {ico:'⭐',lbl:'Scrape GitHub',sub:`Discover AI-forward orgs · score leads · enrich with contacts`,act:()=>setTab('scrape'),dis:false,prime:false},
                 {ico:'✦',lbl:'Generate Emails',sub:`${leads.filter(l=>!l.emailBody).length} leads still need emails written`,act:()=>setTab('generate'),dis:!health?.env?.anthropic,prime:false},
                 {ico:'◈',lbl:'View CRM',sub:`${stats.total} leads · ${stats.hasContact} contacts filled`,act:()=>setTab('crm'),dis:false,prime:false},
                 {ico:'▶',lbl:'Send Campaign',sub:readyCnt>0?`${readyCnt} leads ready — all systems go`:`Add contact emails to unlock`,act:()=>setTab('send'),dis:readyCnt===0,prime:readyCnt>0},
