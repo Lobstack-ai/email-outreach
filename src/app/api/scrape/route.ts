@@ -11,7 +11,7 @@ const TARGETS = [
   { org: 'crewaiinc',      name: 'CrewAI',        type: 'AI/ML Startup',          web: 'https://crewai.com' },
   { org: 'langgenius',     name: 'Dify.AI',       type: 'AI/ML Startup',          web: 'https://dify.ai' },
   { org: 'mendableai',     name: 'Mendable',      type: 'AI/ML Startup',          web: 'https://mendable.ai' },
-  { org: 'FlowiseAI',     name: 'Flowiseai',     type: 'AI/ML Startup',          web: 'https://flowiseai.com' },
+  { org: 'FlowiseAI',      name: 'Flowiseai',     type: 'AI/ML Startup',          web: 'https://flowiseai.com' },
   { org: 'phidatahq',      name: 'Phidata',       type: 'AI/ML Startup',          web: 'https://phidata.com' },
   { org: 'superagent-ai',  name: 'Superagent',    type: 'AI/ML Startup',          web: 'https://superagent.sh' },
   { org: 'replicate',      name: 'Replicate',     type: 'AI/ML Startup',          web: 'https://replicate.com' },
@@ -31,9 +31,36 @@ async function ghFetch(path: string, token?: string) {
   return res.json()
 }
 
+// Compute a lead quality score 0-100 based on GitHub signals
+function computeLeadScore(data: {
+  stars: number; forks: number; watchers: number;
+  memberCount: number; contributors: number; repoCount: number;
+  openIssues: number; hasEmail: boolean; hasWebsite: boolean;
+}): number {
+  let score = 0
+  // Stars: up to 30 pts (log scale)
+  score += Math.min(30, Math.round(Math.log10(data.stars + 1) * 10))
+  // Forks: up to 15 pts
+  score += Math.min(15, Math.round(Math.log10(data.forks + 1) * 6))
+  // Org members: up to 15 pts (5-100 is sweet spot)
+  if (data.memberCount >= 3) score += Math.min(15, Math.round(data.memberCount / 5))
+  // Contributors on top repo: up to 15 pts
+  score += Math.min(15, Math.round(data.contributors / 2))
+  // Watchers: up to 10 pts
+  score += Math.min(10, Math.round(Math.log10(data.watchers + 1) * 4))
+  // Active issues: signals product usage (up to 5 pts)
+  if (data.openIssues > 10) score += 5
+  else if (data.openIssues > 0) score += 2
+  // Bonus: has email contact
+  if (data.hasEmail) score += 5
+  // Bonus: has website
+  if (data.hasWebsite) score += 5
+  return Math.min(100, score)
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const org = searchParams.get('org')
+  const org   = searchParams.get('org')
   const token = searchParams.get('token') || process.env.GITHUB_TOKEN
 
   if (org === 'ratelimit') {
@@ -49,33 +76,59 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, targets: TARGETS })
   }
 
-  // Accept any org — either from hardcoded list or dynamically discovered
+  if (!org) return NextResponse.json({ ok: false, error: 'org required' }, { status: 400 })
+
   const knownTarget = TARGETS.find(t => t.org === org)
-  const website = searchParams.get('website') || knownTarget?.web || ''
+  const website     = searchParams.get('website') || knownTarget?.web || ''
 
   try {
+    // Fetch org, top repos, members, AND contributors for top repo in parallel
     const [orgData, repos, members] = await Promise.all([
       ghFetch(`/orgs/${org}`, token || undefined),
       ghFetch(`/orgs/${org}/repos?sort=stars&per_page=5`, token || undefined),
-      ghFetch(`/orgs/${org}/members?per_page=20`, token || undefined).catch(() => []),
+      ghFetch(`/orgs/${org}/members?per_page=30`, token || undefined).catch(() => []),
     ])
-    const stars = repos.reduce((s: number, r: any) => s + (r.stargazers_count || 0), 0)
-    const topRepos = repos.slice(0, 3).map((r: any) => r.name).join(', ')
+
+    // Aggregate stats across top repos
+    const stars      = repos.reduce((s: number, r: any) => s + (r.stargazers_count || 0), 0)
+    const forks      = repos.reduce((s: number, r: any) => s + (r.forks_count || 0), 0)
+    const watchers   = repos.reduce((s: number, r: any) => s + (r.watchers_count || 0), 0)
+    const openIssues = repos.reduce((s: number, r: any) => s + (r.open_issues_count || 0), 0)
+    const topRepoNames = repos.slice(0, 3).map((r: any) => r.name).join(', ')
+
+    // Get contributors count for the single top repo
+    const topRepo = repos[0]
+    let contributors = 0
+    if (topRepo) {
+      try {
+        const contrib = await ghFetch(
+          `/repos/${org}/${topRepo.name}/contributors?per_page=1&anon=false`,
+          token || undefined
+        )
+        // GitHub returns array; use org member count as proxy if only 1 returned
+        contributors = Array.isArray(contrib) ? contrib.length : 0
+        // Try to get accurate count from header (GitHub paginates)
+        // Use member count as a reasonable proxy
+        if (contributors <= 1) contributors = Math.max(members.length, contributors)
+      } catch { contributors = members.length }
+    }
+
     const topics = repos.flatMap((r: any) => r.topics || [])
     const aiTools = Array.from(new Set(topics.filter((t: string) =>
-      ['ai', 'llm', 'agent', 'ml', 'gpt', 'claude', 'langchain', 'openai'].some(k => t.includes(k))
-    ))).slice(0, 5).join(', ')
+      ['ai', 'llm', 'agent', 'ml', 'gpt', 'claude', 'langchain', 'openai', 'rag', 'vector'].some(k => t.includes(k))
+    ))).slice(0, 8).join(', ')
 
-    // ── Email enrichment ─────────────────────────────────────────────────────
-    // Try to extract domain from website
+    // ── Email enrichment ────────────────────────────────────────────────────────
     let domain: string | null = null
     try {
       const u = new URL(website.startsWith('http') ? website : `https://${website}`)
       domain = u.hostname.replace(/^www\./, '')
     } catch { /* no domain */ }
 
-    // Priority roles for scoring
-    const PRIORITY = ['cto','co-founder','cofounder','founder','vp engineering','vp of engineering','head of engineering','ceo','chief technology','chief executive']
+    const PRIORITY = [
+      'cto','co-founder','cofounder','founder','vp engineering','vp of engineering',
+      'head of engineering','ceo','chief technology','chief executive','cpo','head of product',
+    ]
     const scoreBio = (bio: string) => PRIORITY.filter(r => (bio||'').toLowerCase().includes(r)).length
 
     const emailPatterns = (first: string, last: string, dom: string) => {
@@ -87,7 +140,6 @@ export async function GET(req: NextRequest) {
       return pats
     }
 
-    // Enrich top 10 members in parallel
     let bestContact: { name: string; email: string; confidence: string; title: string; githubUrl: string } | null = null
 
     if (members && members.length > 0) {
@@ -97,68 +149,79 @@ export async function GET(req: NextRequest) {
           if (!p) return null
           const nameParts = (p.name || m.login).trim().split(/\s+/)
           const first = nameParts[0] || ''
-          const last = nameParts.slice(1).join(' ') || ''
-          const verifiedEmail = p.email?.includes('@') ? p.email : null
+          const last  = nameParts.slice(1).join(' ') || ''
+          const verifiedEmail  = p.email?.includes('@') ? p.email : null
           const inferredEmails = domain ? emailPatterns(first, last, domain) : []
           return {
-            login: m.login,
-            name: p.name || m.login,
-            bio: p.bio || '',
-            bioScore: scoreBio(p.bio || ''),
-            followers: p.followers || 0,
-            githubUrl: p.html_url,
-            verifiedEmail,
-            inferredEmails,
-            primaryEmail: verifiedEmail || inferredEmails[0] || null,
-            emailConfidence: verifiedEmail ? 'verified' : inferredEmails.length ? 'inferred' : null,
+            name:           p.name || m.login,
+            bio:            p.bio || '',
+            bioScore:       scoreBio(p.bio || ''),
+            followers:      p.followers || 0,
+            githubUrl:      p.html_url,
+            primaryEmail:   verifiedEmail || inferredEmails[0] || null,
+            emailConfidence:verifiedEmail ? 'verified' : inferredEmails.length ? 'inferred' : null,
           }
         })
       )
-
-      const valid = profiles
-        .filter(Boolean)
+      const valid = profiles.filter(Boolean)
         .sort((a: any, b: any) => (b.bioScore - a.bioScore) || (b.followers - a.followers))
-
       const top = valid[0]
       if (top?.primaryEmail) {
         bestContact = {
-          name: top.name,
-          email: top.primaryEmail,
+          name:       top.name,
+          email:      top.primaryEmail,
           confidence: top.emailConfidence || 'inferred',
-          title: top.bio?.split('\n')[0]?.slice(0, 80) || '',
-          githubUrl: top.githubUrl,
+          title:      top.bio?.split('\n')[0]?.slice(0, 80) || '',
+          githubUrl:  top.githubUrl,
         }
       }
     }
 
-    // Fallback: org-level email
     if (!bestContact && orgData.email) {
       bestContact = {
-        name: orgData.name || org,
-        email: orgData.email,
+        name:       orgData.name || org,
+        email:      orgData.email,
         confidence: 'verified',
-        title: 'Organization contact',
-        githubUrl: `https://github.com/${org}`,
+        title:      'Organization contact',
+        githubUrl:  `https://github.com/${org}`,
       }
     }
 
+    const leadScore = computeLeadScore({
+      stars, forks, watchers,
+      memberCount:  Array.isArray(members) ? members.length : 0,
+      contributors,
+      repoCount:    orgData.public_repos || repos.length,
+      openIssues,
+      hasEmail:     !!bestContact?.email,
+      hasWebsite:   !!(orgData.blog || website),
+    })
+
     return NextResponse.json({
-      ok: true,
+      ok:   true,
       data: {
-        company: orgData.name || knownTarget?.name || org,
-        website: orgData.blog || website || knownTarget?.web || `https://github.com/${org}`,
-        description: orgData.description || '',
-        githubOrgUrl: `https://github.com/${org}`,
-        githubStars: stars,
-        companyType: searchParams.get('type') || knownTarget?.type || 'AI/ML Startup',
-        topRepos,
-        aiTools: aiTools || 'AI/ML tooling',
-        // Enriched contact
-        contactName: bestContact?.name || null,
-        contactEmail: bestContact?.email || null,
-        contactTitle: bestContact?.title || null,
+        company:         orgData.name || knownTarget?.name || org,
+        website:         orgData.blog || website || `https://github.com/${org}`,
+        description:     orgData.description || '',
+        githubOrgUrl:    `https://github.com/${org}`,
+        companyType:     searchParams.get('type') || knownTarget?.type || 'AI/ML Startup',
+        // GitHub metrics
+        githubStars:     stars,
+        githubForks:     forks,
+        githubWatchers:  watchers,
+        orgMembers:      Array.isArray(members) ? members.length : 0,
+        contributors,
+        openIssues,
+        repoCount:       orgData.public_repos || repos.length,
+        topRepos:        topRepoNames,
+        aiTools:         aiTools || 'AI/ML tooling',
+        leadScore,
+        // Contact
+        contactName:     bestContact?.name || null,
+        contactEmail:    bestContact?.email || null,
+        contactTitle:    bestContact?.title || null,
         contactConfidence: bestContact?.confidence || null,
-        contactGithub: bestContact?.githubUrl || null,
+        contactGithub:   bestContact?.githubUrl || null,
       }
     })
   } catch (e: any) {

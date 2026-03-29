@@ -27,34 +27,63 @@ const TARGETS = [
   {org:'fixieai',name:'Fixie AI',type:'AI Startup'},
 ]
 
-type Lead={id:string;company:string;contactName:string;contactEmail:string;jobTitle:string;companyType:string;status:string;githubOrgUrl:string;website:string;aiTools:string;notes:string;emailSubject:string;emailBody:string;source:string}
+type Lead={
+  id:string; company:string; contactName:string; contactEmail:string;
+  jobTitle:string; companyType:string; status:string; sequenceStatus:string;
+  githubOrgUrl:string; website:string; aiTools:string; notes:string;
+  emailSubject:string; emailBody:string; source:string;
+  // GitHub metrics
+  githubStars:number; githubForks:number; githubWatchers:number;
+  orgMembers:number; contributors:number; openIssues:number; repoCount:number;
+  topRepos:string; leadScore:number; description:string;
+  // Sequence emails
+  followUp1Subject:string; followUp1Body:string;
+  followUp2Subject:string; followUp2Body:string;
+}
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
 function mapRecord(r:any):Lead{
-  // Airtable REST API returns fields keyed by NAME (not field ID)
-  const f = r.fields || {}
-  const g = (name:string, fallback='') => {
-    const v = f[name]
-    if (v === undefined || v === null) return fallback
-    if (typeof v === 'object' && 'name' in v) return v.name  // singleSelect
-    if (typeof v === 'object' && 'state' in v) return fallback  // AI field error
+  const f = r.fields||{}
+  const g = (name:string,fallback='')=>{
+    const v=f[name]
+    if(v===undefined||v===null)return fallback
+    if(typeof v==='object'&&'name' in v)return v.name
+    if(typeof v==='object'&&'state' in v)return fallback
     return String(v)
   }
+  const n = (name:string)=>{ const v=f[name]; return typeof v==='number'?v:0 }
   return {
-    id: r.id,
+    id:r.id,
     company:      g('Company'),
     contactName:  g('Contact Name'),
     contactEmail: g('Contact Email'),
     jobTitle:     g('Job Title'),
     companyType:  g('Company Type'),
-    status:       g('Status', 'New'),
+    status:       g('Status','New'),
+    sequenceStatus: g('Sequence Status','Cold'),
     githubOrgUrl: g('GitHub Org URL'),
     website:      g('Website'),
     aiTools:      g('AI Tools Used'),
     notes:        g('Personalization Notes'),
+    description:  g('Personalization Notes'),
     emailSubject: g('Email Subject'),
     emailBody:    g('Email Body'),
     source:       g('Source'),
+    topRepos:     g('Top Repos'),
+    // Numeric metrics
+    githubStars:  n('GitHub Stars'),
+    githubForks:  n('GitHub Forks'),
+    githubWatchers: n('GitHub Watchers'),
+    orgMembers:   n('Org Members'),
+    contributors: n('Top Repo Contributors'),
+    openIssues:   n('Open Issues'),
+    repoCount:    n('Repo Count'),
+    leadScore:    n('Lead Score'),
+    // Sequence
+    followUp1Subject: g('Follow-up 1 Subject'),
+    followUp1Body:    g('Follow-up 1 Body'),
+    followUp2Subject: g('Follow-up 2 Subject'),
+    followUp2Body:    g('Follow-up 2 Body'),
   }
 }
 
@@ -340,6 +369,13 @@ export default function App(){
   const[discovered,setDiscovered]=useState<any[]>([])
   const[discovering,setDiscovering]=useState(false)
   const[searchMode,setSearchMode]=useState<'discover'|'static'>('discover')
+  // Scraper filters
+  const[filterMinStars,setFilterMinStars]=useState(0)
+  const[filterMinForks,setFilterMinForks]=useState(0)
+  const[filterMinMembers,setFilterMinMembers]=useState(0)
+  const[filterMinScore,setFilterMinScore]=useState(0)
+  const[filterSortBy,setFilterSortBy]=useState<'stars'|'forks'|'members'|'score'|'watchers'>('score')
+  const[filterShowHasEmail,setFilterShowHasEmail]=useState(false)
   const[log,setLog]=useState<Log[]>([])
   const logRef=useRef<HTMLDivElement>(null)
   const{ts,toast}=useToast()
@@ -437,19 +473,27 @@ export default function App(){
     for(const d of toSave){
       try{
         const fields: Record<string,any> = {
-          "Company":d.company,
-          "Website":d.website||'',
-          "GitHub Org URL":d.githubOrgUrl,
-          "GitHub Stars":d.githubStars,
-          "Company Type":d.companyType,
-          "AI Tools Used":d.aiTools,
-          "Status":'New',
-          "Source":'GitHub Scrape',
-          "Date Added":new Date().toISOString().split('T')[0],
-          "Personalization Notes":d.description||'',
+          "Company":          d.company,
+          "Website":          d.website||'',
+          "GitHub Org URL":   d.githubOrgUrl,
+          "GitHub Stars":     d.githubStars||0,
+          "GitHub Forks":     d.githubForks||0,
+          "GitHub Watchers":  d.githubWatchers||0,
+          "Org Members":      d.orgMembers||0,
+          "Top Repo Contributors": d.contributors||0,
+          "Open Issues":      d.openIssues||0,
+          "Repo Count":       d.repoCount||0,
+          "Top Repos":        d.topRepos||'',
+          "Lead Score":       d.leadScore||0,
+          "Company Type":     d.companyType,
+          "AI Tools Used":    d.aiTools,
+          "Status":           'New',
+          "Sequence Status":  'Cold',
+          "Source":           'GitHub Scrape',
+          "Date Added":       new Date().toISOString().split('T')[0],
+          "Personalization Notes": d.description||'',
         }
-        // Include enriched contact if found
-        if(d.contactName) fields['Contact Name'] = d.contactName
+        if(d.contactName)  fields['Contact Name']  = d.contactName
         if(d.contactEmail) fields['Contact Email'] = d.contactEmail
         if(d.contactTitle) fields['Job Title'] = d.contactTitle + (d.contactConfidence==='inferred'?' (inferred)':' (verified)')
 
@@ -476,25 +520,39 @@ export default function App(){
     const targets=leads.filter(l=>!l.emailBody&&(sel.size===0||sel.has(l.id)))
     if(!targets.length){toast('No leads need emails','w');return}
     setGenning(true);setGenPct(0)
-    addLog(`=== Generating ${targets.length} emails ===`,'i')
+    addLog(`=== Generating ${targets.length} emails + sequences ===`,'i')
     for(let i=0;i<targets.length;i++){
       const lead=targets[i]
-      addLog(`Writing for ${lead.company}...`,'i')
+      addLog(`Writing sequence for ${lead.company}...`,'i')
       try{
         const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({lead,senderName:'The Lobstack Team'})}).then(r=>r.json())
+          body:JSON.stringify({lead,senderName:'The Lobstack Team',mode:'all'})}).then(r=>r.json())
         if(!r.ok)throw new Error(r.error)
+        // Save cold email + both follow-ups in one Airtable update
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Email Subject":r.subject,"Email Body":r.body}})})
-        setLeads(p=>p.map(l=>l.id===lead.id?{...l,emailSubject:r.subject,emailBody:r.body}:l))
-        addLog(`  ✓ "${r.subject}"`,'o')
+          body:JSON.stringify({action:'update',recordId:lead.id,fields:{
+            "Email Subject":    r.subject,
+            "Email Body":       r.body,
+            "Follow-up 1 Subject": r.followUp1Subject||'',
+            "Follow-up 1 Body":    r.followUp1Body||'',
+            "Follow-up 2 Subject": r.followUp2Subject||'',
+            "Follow-up 2 Body":    r.followUp2Body||'',
+          }})})
+        setLeads(p=>p.map(l=>l.id===lead.id?{...l,
+          emailSubject:r.subject,emailBody:r.body,
+          followUp1Subject:r.followUp1Subject||'',followUp1Body:r.followUp1Body||'',
+          followUp2Subject:r.followUp2Subject||'',followUp2Body:r.followUp2Body||'',
+        }:l))
+        addLog(`  ✓ Cold: "${r.subject}"`,'o')
+        if(r.followUp1Subject) addLog(`  ✓ FU1: "${r.followUp1Subject}"`,'o')
+        if(r.followUp2Subject) addLog(`  ✓ FU2: "${r.followUp2Subject}"`,'o')
       }catch(e:any){addLog(`  ✗ ${lead.company}: ${e.message}`,'e')}
       setGenPct(Math.round(((i+1)/targets.length)*100))
-      await new Promise(r=>setTimeout(r,600))
+      await new Promise(r=>setTimeout(r,800))
     }
     setGenning(false)
-    addLog('=== Generation complete ===','o')
-    toast('Emails generated and saved','o')
+    addLog('=== Sequences complete ===','o')
+    toast('3-part sequences generated and saved','o')
   }
 
   const validateLeads=async()=>{
@@ -790,15 +848,15 @@ export default function App(){
           {tab==='scrape'&&<>
             <div className="ph">
               <div className="ph-t">GitHub Lead Scraper</div>
-              <div className="ph-s">Discover fresh AI-forward companies from live GitHub search — new orgs every time</div>
+              <div className="ph-s">Discover fresh AI-forward companies · filter by metrics · enrich with contact emails</div>
             </div>
 
-            {/* MODE TOGGLE + CONTROLS */}
-            <div className="card" style={{padding:'16px 20px',marginBottom:14}}>
+            {/* MODE TOGGLE + ACTION BAR */}
+            <div className="card" style={{padding:'16px 20px',marginBottom:12}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
                 <div style={{display:'flex',gap:8}}>
                   {([
-                    {id:'discover',label:'🔍 Discover New',sub:'Live GitHub search — filters out existing CRM orgs'},
+                    {id:'discover',label:'🔍 Discover New',sub:'Live GitHub search, filters out existing CRM orgs'},
                     {id:'static', label:'📌 Classic List', sub:'20 hand-picked AI orgs'},
                   ] as {id:string;label:string;sub:string}[]).map(m=>(
                     <button key={m.id} onClick={()=>{setSearchMode(m.id as any);setScraped({});setScrSt({})}}
@@ -811,7 +869,7 @@ export default function App(){
                 <div className="btn-row">
                   {searchMode==='discover'&&(
                     <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
-                      {discovering?'Searching GitHub...':'🔍 Discover Orgs'}
+                      {discovering?'Searching...':'🔍 Discover Orgs'}
                     </button>
                   )}
                   <button className="btn btn-dark"
@@ -819,107 +877,215 @@ export default function App(){
                     disabled={Object.values(scrSt).some(s=>s==='running')||(searchMode==='discover'&&!discovered.length)}>
                     Enrich All
                   </button>
-                  <button className="btn btn-red" onClick={saveToAirtable} disabled={!scCnt}>
-                    ↑ Save {scCnt} to CRM
-                  </button>
+                  <button className="btn btn-red" onClick={saveToAirtable} disabled={!scCnt}>↑ Save {scCnt} to CRM</button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>loadLeads()}>↻ Reload</button>
                 </div>
               </div>
             </div>
 
-            {/* DISCOVER MODE */}
-            {searchMode==='discover'&&(
-              <div className="card">
-                <div className="card-hd">
-                  <div className="ct">
-                    Discovered Orgs
-                    {discovered.length>0&&<span style={{color:'var(--green)',fontSize:11,fontWeight:400,marginLeft:8}}>
-                      {discovered.length} new · not in your CRM
-                    </span>}
-                  </div>
+            {/* FILTER BAR */}
+            <div className="card" style={{padding:'14px 20px',marginBottom:12,background:'var(--s2)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',flexShrink:0}}>Filters</div>
+
+                {/* Sort by */}
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Sort</span>
+                  <select value={filterSortBy} onChange={e=>setFilterSortBy(e.target.value as any)}
+                    style={{fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)',cursor:'pointer'}}>
+                    <option value="score">Lead Score</option>
+                    <option value="stars">Stars</option>
+                    <option value="forks">Forks</option>
+                    <option value="members">Org Members</option>
+                    <option value="watchers">Watchers</option>
+                  </select>
                 </div>
-                {discovering&&(
-                  <div style={{padding:'40px 0',textAlign:'center',color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:12}}>
-                    <div style={{marginBottom:12}}>Searching GitHub across 6 queries for AI-forward orgs...</div>
-                    <div style={{width:240,margin:'0 auto',height:3,background:'var(--b)',borderRadius:2,overflow:'hidden'}}>
-                      <div style={{height:'100%',width:'60%',background:'var(--grad)',borderRadius:2,animation:'none'}}/>
+
+                {/* Min stars */}
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min ⭐</span>
+                  <input type="number" min={0} value={filterMinStars} onChange={e=>setFilterMinStars(Number(e.target.value))}
+                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                </div>
+
+                {/* Min forks */}
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min forks</span>
+                  <input type="number" min={0} value={filterMinForks} onChange={e=>setFilterMinForks(Number(e.target.value))}
+                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                </div>
+
+                {/* Min members */}
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min members</span>
+                  <input type="number" min={0} value={filterMinMembers} onChange={e=>setFilterMinMembers(Number(e.target.value))}
+                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                </div>
+
+                {/* Min lead score */}
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min score</span>
+                  <input type="number" min={0} max={100} value={filterMinScore} onChange={e=>setFilterMinScore(Number(e.target.value))}
+                    style={{width:60,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                </div>
+
+                {/* Email only toggle */}
+                <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                  <input type="checkbox" checked={filterShowHasEmail} onChange={e=>setFilterShowHasEmail(e.target.checked)}
+                    style={{accentColor:'var(--red2)',width:13,height:13}}/>
+                  Has email
+                </label>
+
+                {/* Reset */}
+                {(filterMinStars>0||filterMinForks>0||filterMinMembers>0||filterMinScore>0||filterShowHasEmail||filterSortBy!=='score')&&(
+                  <button className="btn btn-ghost btn-xs" onClick={()=>{
+                    setFilterMinStars(0);setFilterMinForks(0);setFilterMinMembers(0);
+                    setFilterMinScore(0);setFilterShowHasEmail(false);setFilterSortBy('score');
+                  }}>✕ Reset</button>
+                )}
+              </div>
+            </div>
+
+            {/* DISCOVER MODE */}
+            {searchMode==='discover'&&(()=>{
+              const sortFn=(a:any,b:any)=>{
+                if(filterSortBy==='stars')   return (b.stars||0)-(a.stars||0)
+                if(filterSortBy==='forks')   return (b.forks||0)-(a.forks||0)
+                if(filterSortBy==='members') return (b.members||0)-(a.members||0)
+                if(filterSortBy==='watchers')return (b.watchers||0)-(a.watchers||0)
+                // default: score — use scraped data if available, else stars as proxy
+                const scoreA = scraped[a.org]?.leadScore ?? a.stars ?? 0
+                const scoreB = scraped[b.org]?.leadScore ?? b.stars ?? 0
+                return scoreB-scoreA
+              }
+              const filtered = discovered
+                .filter(o=>{
+                  if(filterMinStars>0&&(o.stars||0)<filterMinStars) return false
+                  if(filterMinForks>0&&(o.forks||0)<filterMinForks) return false
+                  if(filterMinMembers>0&&(o.members||0)<filterMinMembers) return false
+                  const score = scraped[o.org]?.leadScore ?? 0
+                  if(filterMinScore>0&&score<filterMinScore) return false
+                  if(filterShowHasEmail&&!scraped[o.org]?.contactEmail) return false
+                  return true
+                })
+                .sort(sortFn)
+              return(
+                <div className="card">
+                  <div className="card-hd">
+                    <div className="ct">
+                      Discovered Orgs
+                      {discovered.length>0&&<span style={{color:'var(--green)',fontSize:11,fontWeight:400,marginLeft:8}}>
+                        {filtered.length} shown{filtered.length!==discovered.length?` of ${discovered.length}`:''}
+                      </span>}
                     </div>
                   </div>
-                )}
-                {!discovering&&discovered.length===0&&(
-                  <div className="empty">
-                    <div className="empty-ico">🔍</div>
-                    <div className="empty-t">Click Discover Orgs to find fresh leads</div>
-                    <div className="empty-s">Runs 6 parallel GitHub searches for orgs actively building with AI agents, LLMs, and developer tools. Automatically excludes any company already in your CRM.</div>
+                  {discovering&&(
+                    <div style={{padding:'40px 0',textAlign:'center',color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:12}}>
+                      <div style={{marginBottom:12}}>Searching GitHub across 6 queries...</div>
+                    </div>
+                  )}
+                  {!discovering&&discovered.length===0&&(
+                    <div className="empty">
+                      <div className="empty-ico">🔍</div>
+                      <div className="empty-t">Click Discover Orgs to find fresh leads</div>
+                      <div className="empty-s">Runs 6 parallel GitHub searches for orgs building with AI. Excludes companies already in your CRM.</div>
+                    </div>
+                  )}
+                  {filtered.length>0&&(
+                    <div className="sg">
+                      {filtered.map((org:any)=>{
+                        const st=scrSt[org.org]||'idle', d=scraped[org.org]
+                        const score=d?.leadScore
+                        return(
+                          <div key={org.org}
+                            className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
+                            onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website})}>
+                            <div className="sn">{org.name}</div>
+                            <div className="stype">{org.type}</div>
+                            <div className="sstar">⭐ {(org.stars||0).toLocaleString()}</div>
+                            {d?<>
+                              <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
+                                {d.githubForks>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>⑂{d.githubForks}</span>}
+                                {d.orgMembers>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>👥{d.orgMembers}</span>}
+                                {score>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:score>=70?'#16a34a15':score>=40?'#d9770615':'var(--s3)',color:score>=70?'var(--green)':score>=40?'var(--yellow)':'var(--ink3)'}}>{score}</span>}
+                              </div>
+                              {d.contactEmail
+                                ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
+                                :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
+                            </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
+                              {st==='running'?'Enriching...':st==='fail'?'Failed — retry':'Click to enrich'}
+                            </div>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            {/* STATIC MODE */}
+            {searchMode==='static'&&(()=>{
+              const sortFn=(a:any,b:any)=>{
+                const da=scraped[a.org], db=scraped[b.org]
+                if(!da&&!db) return 0
+                if(!da) return 1; if(!db) return -1
+                if(filterSortBy==='stars')   return (db.githubStars||0)-(da.githubStars||0)
+                if(filterSortBy==='forks')   return (db.githubForks||0)-(da.githubForks||0)
+                if(filterSortBy==='members') return (db.orgMembers||0)-(da.orgMembers||0)
+                if(filterSortBy==='watchers')return (db.githubWatchers||0)-(da.githubWatchers||0)
+                return (db.leadScore||0)-(da.leadScore||0)
+              }
+              const filtered = TARGETS
+                .filter(tgt=>{
+                  const d=scraped[tgt.org]
+                  if(!d) return filterMinStars===0&&filterMinForks===0&&filterMinMembers===0&&filterMinScore===0&&!filterShowHasEmail
+                  if(filterMinStars>0&&(d.githubStars||0)<filterMinStars) return false
+                  if(filterMinForks>0&&(d.githubForks||0)<filterMinForks) return false
+                  if(filterMinMembers>0&&(d.orgMembers||0)<filterMinMembers) return false
+                  if(filterMinScore>0&&(d.leadScore||0)<filterMinScore) return false
+                  if(filterShowHasEmail&&!d.contactEmail) return false
+                  return true
+                })
+                .sort(sortFn)
+              return(
+                <div className="card">
+                  <div className="card-hd">
+                    <div className="ct">Classic Target List</div>
+                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                      {filtered.length}/{TARGETS.length} shown
+                    </span>
                   </div>
-                )}
-                {discovered.length>0&&(
                   <div className="sg">
-                    {discovered.map((org:any)=>{
-                      const st=scrSt[org.org]||'idle', d=scraped[org.org]
+                    {filtered.map(tgt=>{
+                      const st=scrSt[tgt.org]||'idle', d=scraped[tgt.org]
+                      const score=d?.leadScore
                       return(
-                        <div key={org.org}
+                        <div key={tgt.org}
                           className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                          onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website})}>
-                          <div className="sn">{org.name}</div>
-                          <div className="stype">{org.type}</div>
-                          <div className="sstar">⭐ {org.stars?.toLocaleString()}</div>
+                          onClick={()=>(st==='idle'||st==='fail')&&scrapeOne(tgt)}>
+                          <div className="sn">{tgt.name}</div>
+                          <div className="stype">{tgt.type}</div>
                           {d?<>
-                            <div className="srepo">{d.topRepos}</div>
+                            <div className="sstar">⭐ {(d.githubStars||0).toLocaleString()}</div>
+                            <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
+                              {d.githubForks>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>⑂{d.githubForks}</span>}
+                              {d.orgMembers>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>👥{d.orgMembers}</span>}
+                              {score>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:score>=70?'#16a34a15':score>=40?'#d9770615':'var(--s3)',color:score>=70?'var(--green)':score>=40?'var(--yellow)':'var(--ink3)'}}>{score}</span>}
+                            </div>
                             {d.contactEmail
                               ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
                               :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
                           </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
-                            {st==='running'?'Enriching...':st==='fail'?'Failed — retry':'Click to enrich'}
+                            {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
                           </div>}
                         </div>
                       )
                     })}
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* STATIC MODE */}
-            {searchMode==='static'&&(
-              <div className="card">
-                <div className="card-hd">
-                  <div className="ct">Classic Target List</div>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{TARGETS.length} hand-picked orgs</span>
                 </div>
-                {health?.github?.remaining<40&&(
-                  <div className="alert aw mb16">
-                    <span className="alert-icon">⚡</span>
-                    <div className="alert-body">
-                      <div className="alert-title">Low rate limit — {health.github.remaining} requests left</div>
-                      {health.github.authenticated?'Wait for hourly reset.':'Add GITHUB_TOKEN to Vercel for 5,000 req/hr.'}
-                    </div>
-                  </div>
-                )}
-                <div className="sg">
-                  {TARGETS.map(tgt=>{
-                    const st=scrSt[tgt.org]||'idle', d=scraped[tgt.org]
-                    return(
-                      <div key={tgt.org}
-                        className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                        onClick={()=>(st==='idle'||st==='fail')&&scrapeOne(tgt)}>
-                        <div className="sn">{tgt.name}</div>
-                        <div className="stype">{tgt.type}</div>
-                        {d?<>
-                          <div className="sstar">⭐ {d.githubStars?.toLocaleString()}</div>
-                          <div className="srepo">{d.topRepos}</div>
-                          {d.contactEmail
-                            ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
-                            :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
-                        </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
-                          {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
-                        </div>}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
+              )
+            })()}
 
             <div className="card">
               <div className="ct" style={{marginBottom:14}}>Log</div>
@@ -927,7 +1093,6 @@ export default function App(){
             </div>
           </>}
 
-          {/* ══ CRM ══ */}
           {/* ══ CRM ══ */}
           {tab==='crm'&&<>
             <div className="ph">
@@ -955,14 +1120,20 @@ export default function App(){
                   <table>
                     <thead><tr>
                       <th><input type="checkbox" className="ck" onChange={e=>setSel(e.target.checked?new Set(leads.map(l=>l.id)):new Set())}/></th>
-                      <th>Company</th><th>Type</th><th>Contact Email</th><th>Status</th><th>AI Tools</th><th>Email</th><th></th>
+                      <th>Company</th><th>Score</th><th>Contact Email</th><th>Status</th><th>Sequence</th><th>Stars</th><th>Email</th><th></th>
                     </tr></thead>
                     <tbody>
                       {leads.map(lead=>(
                         <tr key={lead.id} className={sel.has(lead.id)?'sel':''}>
                           <td><input type="checkbox" className="ck" checked={sel.has(lead.id)} onChange={e=>{const s=new Set(sel);e.target.checked?s.add(lead.id):s.delete(lead.id);setSel(s)}}/></td>
                           <td><strong>{lead.company}</strong></td>
-                          <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.companyType}</span></td>
+                          <td>
+                            {lead.leadScore>0?(
+                              <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:4,background:lead.leadScore>=70?'#16a34a15':lead.leadScore>=40?'#d9770615':'var(--s3)',color:lead.leadScore>=70?'var(--green)':lead.leadScore>=40?'var(--yellow)':'var(--ink3)'}}>
+                                {lead.leadScore}
+                              </span>
+                            ):<span style={{color:'var(--ink4)',fontSize:11}}>—</span>}
+                          </td>
                           <td>{lead.contactEmail?(
                                 <div style={{display:'flex',alignItems:'center',gap:5}}>
                                   <span style={{fontFamily:'var(--mono)',fontSize:11}}>{lead.contactEmail}</span>
@@ -971,8 +1142,14 @@ export default function App(){
                                 </div>
                               ):<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>Add in Airtable →</span>}</td>
                           <td><span className={`pill ${lead.status==='Email Sent'?'ps':lead.status==='Replied'?'pr':lead.status==='Booked Call'?'pb2':'pn'}`}>{lead.status||'New'}</span></td>
-                          <td><span style={{color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:10}}>{lead.aiTools||'—'}</span></td>
-                          <td>{lead.emailBody?<span style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:10}}>✓</span>:<span style={{color:'var(--ink4)',fontSize:10}}>—</span>}</td>
+                          <td>
+                            <span style={{fontFamily:'var(--mono)',fontSize:10,color:lead.sequenceStatus==='Replied'?'var(--green)':lead.sequenceStatus==='Booked'?'var(--green)':lead.sequenceStatus==='Cold'?'var(--ink4)':'var(--ink3)'}}>
+                              {lead.sequenceStatus||'Cold'}
+                              {lead.followUp1Body&&!lead.followUp1Subject.includes('Re:')===false&&<span style={{color:'var(--ink4)',marginLeft:4}}>→FU1</span>}
+                            </span>
+                          </td>
+                          <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.githubStars>0?`⭐${lead.githubStars.toLocaleString()}`:'—'}</span></td>
+                          <td>{lead.emailBody?<span style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:10}}>✓{lead.followUp1Body?' +seq':''}</span>:<span style={{color:'var(--ink4)',fontSize:10}}>—</span>}</td>
                           <td>{lead.emailBody&&<button className="btn btn-ghost btn-xs" onClick={()=>setPreview(lead)}>Preview</button>}</td>
                         </tr>
                       ))}
@@ -984,14 +1161,39 @@ export default function App(){
             {preview&&(
               <div className="card">
                 <div className="card-hd">
-                  <div className="ct">{preview.company} — Preview</div>
+                  <div className="ct">{preview.company} — Full Sequence</div>
                   <button className="btn btn-ghost btn-sm" onClick={()=>setPreview(null)}>✕ Close</button>
                 </div>
                 <div className="em">
-                  <div>To: <span>{preview.contactEmail||'(no contact email)'}</span></div>
-                  <div>Subject: <span>{preview.emailSubject}</span></div>
+                  <div>To: <span>{preview.contactEmail||'(no contact email — add in Airtable)'}</span></div>
                 </div>
-                <div className="ep">{preview.emailBody}</div>
+                {/* Email 1 */}
+                <div style={{marginBottom:16}}>
+                  <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+                    Cold Email · Day 1
+                    <span style={{color:'var(--blue)',background:'#2563eb10',padding:'1px 6px',borderRadius:3}}>Send first</span>
+                  </div>
+                  <div className="em"><div>Subject: <span>{preview.emailSubject}</span></div></div>
+                  <div className="ep">{preview.emailBody}</div>
+                </div>
+                {/* Follow-up 1 */}
+                {preview.followUp1Body&&<div style={{marginBottom:16}}>
+                  <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+                    Follow-up 1 · Day 5
+                    <span style={{color:'var(--yellow)',background:'#d9770610',padding:'1px 6px',borderRadius:3}}>If no reply</span>
+                  </div>
+                  <div className="em"><div>Subject: <span>{preview.followUp1Subject}</span></div></div>
+                  <div className="ep">{preview.followUp1Body}</div>
+                </div>}
+                {/* Follow-up 2 */}
+                {preview.followUp2Body&&<div>
+                  <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+                    Breakup Email · Day 12
+                    <span style={{color:'var(--red)',background:'#E8414210',padding:'1px 6px',borderRadius:3}}>Final touchpoint</span>
+                  </div>
+                  <div className="em"><div>Subject: <span>{preview.followUp2Subject}</span></div></div>
+                  <div className="ep">{preview.followUp2Body}</div>
+                </div>}
               </div>
             )}
             <div className="alert ao">
@@ -1045,19 +1247,55 @@ export default function App(){
             </div>
             {leads.filter(l=>l.emailBody).length>0&&(
               <div className="card">
-                <div className="ct" style={{marginBottom:18}}>Generated Emails</div>
-                {leads.filter(l=>l.emailBody).slice(0,5).map((lead,i,arr)=>(
-                  <div key={lead.id} style={{marginBottom:i<arr.length-1?20:0,paddingBottom:i<arr.length-1?20:0,borderBottom:i<arr.length-1?'1px solid var(--b)':'none'}}>
-                    <div className="flex ic gap8 mb8">
-                      <strong>{lead.company}</strong>
-                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.companyType}</span>
+                <div className="card-hd">
+                  <div className="ct">Generated Sequences</div>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                    {leads.filter(l=>l.emailBody).length} leads · 3 emails each
+                  </span>
+                </div>
+                {leads.filter(l=>l.emailBody).slice(0,3).map((lead,i,arr)=>{
+                  const hasFU1=!!lead.followUp1Body, hasFU2=!!lead.followUp2Body
+                  return(
+                    <div key={lead.id} style={{marginBottom:i<arr.length-1?24:0,paddingBottom:i<arr.length-1?24:0,borderBottom:i<arr.length-1?'1px solid var(--b)':'none'}}>
+                      {/* Lead header with score */}
+                      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+                        <strong style={{fontSize:14}}>{lead.company}</strong>
+                        <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.companyType}</span>
+                        {lead.leadScore>0&&<span style={{fontFamily:'var(--mono)',fontSize:10,padding:'2px 7px',borderRadius:4,background:lead.leadScore>=70?'#16a34a15':lead.leadScore>=40?'#d9770615':'var(--s3)',color:lead.leadScore>=70?'var(--green)':lead.leadScore>=40?'var(--yellow)':'var(--ink3)'}}>Score {lead.leadScore}</span>}
+                        {lead.contactEmail&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)'}}>✓ {lead.contactEmail}</span>}
+                      </div>
+                      {/* 3-part sequence tabs */}
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+                        {/* Cold email */}
+                        <div style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'12px',border:'1px solid var(--b)'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Cold Email · Day 1</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:'var(--ink)',marginBottom:8}}>{lead.emailSubject}</div>
+                          <div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{lead.emailBody?.slice(0,200)}{lead.emailBody?.length>200?'…':''}</div>
+                        </div>
+                        {/* Follow-up 1 */}
+                        <div style={{background:hasFU1?'var(--s2)':'var(--s3)',borderRadius:'var(--r)',padding:'12px',border:'1px solid var(--b)',opacity:hasFU1?1:.5}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Follow-up 1 · Day 5</div>
+                          {hasFU1?<>
+                            <div style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:'var(--ink)',marginBottom:8}}>{lead.followUp1Subject}</div>
+                            <div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{lead.followUp1Body?.slice(0,200)}{lead.followUp1Body?.length>200?'…':''}</div>
+                          </>:<div style={{fontSize:11,color:'var(--ink4)',fontStyle:'italic'}}>Not generated yet</div>}
+                        </div>
+                        {/* Follow-up 2 (breakup) */}
+                        <div style={{background:hasFU2?'var(--s2)':'var(--s3)',borderRadius:'var(--r)',padding:'12px',border:'1px solid var(--b)',opacity:hasFU2?1:.5}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Breakup Email · Day 12</div>
+                          {hasFU2?<>
+                            <div style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:'var(--ink)',marginBottom:8}}>{lead.followUp2Subject}</div>
+                            <div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{lead.followUp2Body?.slice(0,200)}{lead.followUp2Body?.length>200?'…':''}</div>
+                          </>:<div style={{fontSize:11,color:'var(--ink4)',fontStyle:'italic'}}>Not generated yet</div>}
+                        </div>
+                      </div>
                     </div>
-                    <div className="em"><div>Subject: <span>{lead.emailSubject}</span></div></div>
-                    <div className="ep" style={{maxHeight:120}}>{lead.emailBody}</div>
+                  )
+                })}
+                {leads.filter(l=>l.emailBody).length>3&&(
+                  <div style={{marginTop:16,fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)',textAlign:'center'}}>
+                    +{leads.filter(l=>l.emailBody).length-3} more sequences saved to Airtable
                   </div>
-                ))}
-                {leads.filter(l=>l.emailBody).length>5&&(
-                  <div style={{marginTop:16,fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)',textAlign:'center'}}>+{leads.filter(l=>l.emailBody).length-5} more — view all in CRM tab</div>
                 )}
               </div>
             )}
