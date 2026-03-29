@@ -334,6 +334,8 @@ export default function App(){
   const[sendPct,setSendPct]=useState(0)
   const[preview,setPreview]=useState<Lead|null>(null)
   const[provider,setProvider]=useState<'privateemail'|'gmail'>('privateemail')
+  const[validation,setValidation]=useState<any>(null)
+  const[validating,setValidating]=useState(false)
   const[log,setLog]=useState<Log[]>([])
   const logRef=useRef<HTMLDivElement>(null)
   const{ts,toast}=useToast()
@@ -468,9 +470,41 @@ export default function App(){
     toast('Emails generated and saved','o')
   }
 
+  const validateLeads=async()=>{
+    const targets=leads.filter(l=>l.emailBody&&l.emailSubject&&(sel.size===0||sel.has(l.id)))
+    if(!targets.length){toast('No leads with emails generated yet','w');return}
+    setValidating(true)
+    setValidation(null)
+    try{
+      const r=await fetch('/api/validate-emails',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({leads:targets})}).then(r=>r.json())
+      if(r.ok){
+        setValidation(r)
+        addLog(`Validation complete: ${r.summary.willSend} will send, ${r.summary.blocked} blocked`,'o')
+        if(r.summary.personal>0) addLog(`  ✗ ${r.summary.personal} personal emails (Gmail/Hey/etc) — find company emails via Hunter.io`,'w')
+        if(r.summary.edu>0)      addLog(`  ✗ ${r.summary.edu} education emails blocked`,'w')
+        if(r.summary.missing>0)  addLog(`  ✗ ${r.summary.missing} leads missing contact email`,'w')
+        if(r.summary.role>0)     addLog(`  ⚠ ${r.summary.role} role-based emails (hello@, info@) — will send but lower reply rate`,'w')
+      }
+    }catch(e:any){addLog(`✗ Validation: ${e.message}`,'e')}
+    setValidating(false)
+  }
+
   const runCampaign=async()=>{
-    const ready=leads.filter(l=>l.emailBody&&l.emailSubject&&l.contactEmail&&l.status==='New'&&(sel.size===0||sel.has(l.id)))
-    if(!ready.length){toast('No ready leads — add contact emails in Airtable first','w');return}
+    // Run validation first if not done
+    if(!validation){
+      toast('Run validation first to check email quality','w')
+      await validateLeads()
+      return
+    }
+    // Cross-reference with validation — only send to leads that passed
+    const blockedIds = new Set((validation?.results||[]).filter((r:any)=>!r.willSend).map((r:any)=>r.id))
+    const ready = leads.filter(l=>
+      l.emailBody && l.emailSubject && l.contactEmail && l.status==='New' &&
+      !blockedIds.has(l.id) &&
+      (sel.size===0||sel.has(l.id))
+    )
+    if(!ready.length){toast('No sendable leads — all blocked by validation or missing emails','w');return}
     setSending(true);setSendPct(0)
     addLog(`=== Campaign: ${ready.length} leads via ${provider} ===`,'i')
     for(let i=0;i<ready.length;i++){
@@ -821,8 +855,8 @@ export default function App(){
                           <td>{lead.contactEmail?(
                                 <div style={{display:'flex',alignItems:'center',gap:5}}>
                                   <span style={{fontFamily:'var(--mono)',fontSize:11}}>{lead.contactEmail}</span>
-                                  {lead.jobTitle?.includes('(verified)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--green)',background:'#16a34a10',padding:'1px 5px',borderRadius:3}}>verified</span>}
-                                  {lead.jobTitle?.includes('(inferred)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--yellow)',background:'#d9770610',padding:'1px 5px',borderRadius:3}}>inferred</span>}
+                                  {lead.jobTitle?.includes('(verified)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--green)',background:'#16a34a10',padding:'1px 5px',borderRadius:3}}>GitHub public</span>}
+                                  {lead.jobTitle?.includes('(inferred)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--yellow)',background:'#d9770610',padding:'1px 5px',borderRadius:3}}>pattern guess</span>}
                                 </div>
                               ):<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>Add in Airtable →</span>}</td>
                           <td><span className={`pill ${lead.status==='Email Sent'?'ps':lead.status==='Replied'?'pr':lead.status==='Booked Call'?'pb2':'pn'}`}>{lead.status||'New'}</span></td>
@@ -922,8 +956,10 @@ export default function App(){
           {tab==='send'&&<>
             <div className="ph">
               <div className="ph-t">Send Campaign</div>
-              <div className="ph-s">Deploy emails via PrivateEmail SMTP · 45 second cooldown between sends · all sends logged to Airtable</div>
+              <div className="ph-s">Validate emails before sending · PrivateEmail SMTP · 45s cooldown · all sends logged to Airtable</div>
             </div>
+
+            {/* STEP 1 — PROVIDER */}
             <div className="card">
               <div className="ct" style={{marginBottom:16}}>Email Provider</div>
               <div className="pt">
@@ -937,33 +973,120 @@ export default function App(){
                   </div>
                 ))}
               </div>
-              <div className="card-hd" style={{marginBottom:12}}>
-                <div className="ct">Launch</div>
+            </div>
+
+            {/* STEP 2 — VALIDATE */}
+            <div className="card">
+              <div className="card-hd">
+                <div className="ct">Step 1 — Validate Emails</div>
                 <div className="btn-row">
-                  <button className="btn btn-red" onClick={runCampaign} disabled={sending||!readyCnt}>
-                    {sending?`Sending... ${sendPct}%`:`▶ Send Campaign (${readyCnt} ready)`}
+                  <button className="btn btn-dark" onClick={validateLeads} disabled={validating||!leads.length}>
+                    {validating?'Validating...':'▶ Run Validation'}
                   </button>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{stats.sent} sent · {stats.replied} replied · {stats.booked} booked</span>
+                  {validation&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)'}}>
+                    ✓ {validation.summary.willSend} will send · {validation.summary.blocked} blocked
+                  </span>}
                 </div>
               </div>
+              <p style={{fontSize:12,color:'var(--ink3)',marginBottom:16,lineHeight:1.6}}>
+                Checks every contact email before sending — blocks personal addresses (Gmail, Hey, etc.), education emails (.edu), and flags role-based addresses. Prevents spam filter rejections.
+              </p>
+
+              {validation&&(
+                <div style={{display:'flex',flexDirection:'column',gap:2}}>
+                  {/* Summary row */}
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:8,marginBottom:14}}>
+                    {[
+                      {label:'Ready',val:validation.summary.ready,color:'var(--green)'},
+                      {label:'Role-based',val:validation.summary.role,color:'var(--yellow)'},
+                      {label:'Personal',val:validation.summary.personal,color:'var(--red)'},
+                      {label:'Edu',val:validation.summary.edu,color:'var(--red)'},
+                      {label:'Missing',val:validation.summary.missing,color:'var(--ink4)'},
+                    ].map(({label,val,color})=>(
+                      <div key={label} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'10px 12px',border:'1px solid var(--b)'}}>
+                        <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:20,color:val>0?color:'var(--ink4)'}}>{val}</div>
+                        <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:3}}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Per-lead results */}
+                  <div style={{border:'1px solid var(--b)',borderRadius:'var(--r)',overflow:'hidden'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                      <thead>
+                        <tr>
+                          {['Company','Email','Status','Action'].map(h=>(
+                            <th key={h} style={{padding:'8px 12px',textAlign:'left',fontFamily:'var(--mono)',fontSize:9,textTransform:'uppercase',letterSpacing:'.8px',color:'var(--ink3)',background:'var(--s2)',borderBottom:'1px solid var(--b)'}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {validation.results.map((r:any)=>(
+                          <tr key={r.id} style={{borderBottom:'1px solid var(--b)'}}>
+                            <td style={{padding:'9px 12px'}}><strong>{r.company}</strong></td>
+                            <td style={{padding:'9px 12px',fontFamily:'var(--mono)',fontSize:11,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.email||<span style={{color:'var(--ink4)',fontStyle:'italic'}}>—</span>}</td>
+                            <td style={{padding:'9px 12px'}}>
+                              <span style={{
+                                fontFamily:'var(--mono)',fontSize:9,fontWeight:600,textTransform:'uppercase',
+                                padding:'2px 8px',borderRadius:999,border:'1px solid',
+                                color:r.status==='ready'?'var(--green)':r.status==='role'?'var(--yellow)':r.status==='missing'?'var(--ink4)':'var(--red)',
+                                background:r.status==='ready'?'#16a34a10':r.status==='role'?'#d9770610':r.status==='missing'?'var(--s3)':'#E8414210',
+                                borderColor:r.status==='ready'?'#16a34a30':r.status==='role'?'#d9770630':r.status==='missing'?'var(--b2)':'#E8414230',
+                              }}>
+                                {r.status==='ready'?'✓ Ready':r.status==='role'?'⚠ Role':r.status==='personal'?'✗ Personal':r.status==='edu'?'✗ Edu':r.status==='missing'?'○ Missing':'✗ Invalid'}
+                              </span>
+                            </td>
+                            <td style={{padding:'9px 12px',fontSize:11,color:'var(--ink3)'}}>{r.willSend?<span style={{color:'var(--green)'}}>Will send</span>:<span style={{color:'var(--red)'}}>{r.reason}</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* STEP 3 — SEND */}
+            <div className="card">
+              <div className="card-hd">
+                <div className="ct">Step 2 — Send Campaign</div>
+                <div className="btn-row">
+                  <button className="btn btn-red"
+                    onClick={runCampaign}
+                    disabled={sending||!validation||validation.summary.willSend===0}>
+                    {sending?`Sending... ${sendPct}%`:
+                     !validation?'Validate first →':
+                     `▶ Send to ${validation.summary.willSend} leads`}
+                  </button>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{stats.sent} sent · {stats.replied} replied</span>
+                </div>
+              </div>
+
+              {!validation&&(
+                <div className="alert aw" style={{marginBottom:0}}>
+                  <span className="alert-icon">⚠</span>
+                  <div className="alert-body">
+                    <div className="alert-title">Run validation before sending</div>
+                    Sending without validation caused the previous spam block. PrivateEmail blocks bulk sends to personal/invalid addresses.
+                  </div>
+                </div>
+              )}
+
               {sending&&(
                 <div className="pgwrap">
                   <div className="pglbl"><span>Sending...</span><span>{sendPct}%</span></div>
                   <div className="pgbar"><div className="pgfill" style={{width:`${sendPct}%`}}/></div>
                 </div>
               )}
-            </div>
-            <div className="card">
-              <div className="ct" style={{marginBottom:16}}>Pre-Send Checklist</div>
-              <div className="cklist">
+
+              {/* System checklist */}
+              <div className="cklist" style={{marginTop:16}}>
                 {[
                   {lbl:'Airtable connected',ok:health?.airtable?.ok??false,soft:false},
                   {lbl:'PrivateEmail SMTP verified',ok:health?.smtp?.ok??false,soft:!!health?.env?.smtpEmail&&!health?.smtp?.ok},
-                  {lbl:'Anthropic API configured',ok:!!health?.env?.anthropic,soft:false},
-                  {lbl:`Leads loaded (${stats.total})`,ok:stats.total>0,soft:false},
-                  {lbl:`Emails generated (${stats.hasEmail})`,ok:stats.hasEmail>0,soft:false},
-                  {lbl:`Contact emails added (${stats.hasContact})`,ok:stats.hasContact>0,soft:stats.hasContact<stats.total&&stats.hasContact>0},
-                  {lbl:`${readyCnt} leads ready to send`,ok:readyCnt>0,soft:false},
+                  {lbl:'Emails generated',ok:stats.hasEmail>0,soft:false},
+                  {lbl:'Validation complete',ok:!!validation,soft:false},
+                  {lbl:`${validation?.summary?.willSend??0} leads cleared for sending`,ok:(validation?.summary?.willSend??0)>0,soft:false},
                 ].map(({lbl,ok,soft}:{lbl:string,ok:boolean,soft:boolean})=>(
                   <div key={lbl} className="crow">
                     <span className="ci" style={{color:ok?'var(--green)':soft?'var(--yellow)':'var(--ink4)'}}>{ok?'✓':soft?'⚠':'○'}</span>
@@ -971,14 +1094,28 @@ export default function App(){
                   </div>
                 ))}
               </div>
-              <div style={{marginTop:16,padding:'14px 16px',background:'var(--s2)',borderRadius:'var(--r)',border:'1px solid var(--b)'}}>
-                <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>How to add contact emails</div>
-                <p style={{fontSize:12,color:'var(--ink3)',lineHeight:1.65}}>
-                  Open <button className="pipe-cta" onClick={()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank')}>Airtable → Lobstack Leads ↗</button> and fill in the <strong style={{color:'var(--ink)'}}>Contact Email</strong> column.
-                  Use <strong style={{color:'var(--ink)'}}>Hunter.io</strong>, <strong style={{color:'var(--ink)'}}>Apollo.io</strong>, or <strong style={{color:'var(--ink)'}}>LinkedIn Sales Nav</strong>.
-                </p>
+            </div>
+
+            {/* SPAM TIPS */}
+            <div className="card" style={{background:'var(--s2)'}}>
+              <div className="ct" style={{marginBottom:12}}>Improving Deliverability</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                {[
+                  {ico:'✗',title:'Blocked — use Hunter.io/Apollo to replace',items:['Personal emails (Gmail, Hey, Outlook)','Education emails (.edu)','Generic inferred emails for unknown contacts']},
+                  {ico:'✓',title:'Best practices to avoid spam filters',items:['Warm up domain — send 5–10 manual emails first','Space sends 45s apart (already enforced)','Each email has HTML + plain text (already done)','Unsubscribe link in every email (already added)']},
+                ].map(({ico,title,items})=>(
+                  <div key={title} style={{padding:'14px 16px',background:'var(--s1)',borderRadius:'var(--r)',border:'1px solid var(--b)'}}>
+                    <div style={{fontFamily:'var(--mono)',fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'1px',color:'var(--ink3)',marginBottom:10}}>{ico} {title}</div>
+                    {items.map(item=>(
+                      <div key={item} style={{fontSize:11,color:'var(--ink3)',padding:'3px 0',display:'flex',gap:8,alignItems:'flex-start'}}>
+                        <span style={{color:'var(--ink4)',flexShrink:0}}>·</span>{item}
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
             </div>
+
             <div className="card">
               <div className="ct" style={{marginBottom:14}}>Campaign Log</div>
               <Logbox/>
