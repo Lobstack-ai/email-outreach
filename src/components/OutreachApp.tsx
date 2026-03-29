@@ -605,7 +605,7 @@ export default function App(){
           msgId=r.messageId
         }
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Status":'Email Sent',"Last Contacted":new Date().toISOString().split('T')[0],"Follow Up #":1}})})
+          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Status":'Email Sent',"Sequence Status":'Email 1 Sent',"Last Contacted":new Date().toISOString().split('T')[0],"Follow Up #":1}})})
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({action:'log',fields:{"Campaign ID":`CAM-${Date.now()}`,"Company":lead.company,"Contact Email":lead.contactEmail,"Subject":lead.emailSubject,"Sequence Step":'Cold Email #1',"Sent At":new Date().toISOString(),"Message ID":msgId,"Result":'Sent'}})})
         setLeads(p=>p.map(l=>l.id===lead.id?{...l,status:'Email Sent'}:l))
@@ -839,6 +839,54 @@ export default function App(){
                 </div>
               </div>
             )}
+
+            {/* SEQUENCE STATUS */}
+            {leads.length>0&&(()=>{
+              const seqCounts = {
+                cold:     leads.filter(l=>!l.sequenceStatus||l.sequenceStatus==='Cold').length,
+                email1:   leads.filter(l=>l.sequenceStatus==='Email 1 Sent').length,
+                fu1:      leads.filter(l=>l.sequenceStatus==='Follow-up 1 Sent').length,
+                fu2:      leads.filter(l=>l.sequenceStatus==='Follow-up 2 Sent').length,
+                replied:  leads.filter(l=>l.sequenceStatus==='Replied').length,
+                booked:   leads.filter(l=>l.sequenceStatus==='Booked').length,
+                optedOut: leads.filter(l=>l.sequenceStatus==='Opted Out').length,
+              }
+              const fu1Due = leads.filter(l=>{
+                if(l.sequenceStatus!=='Email 1 Sent'||!l.followUp1Body) return false
+                return true // server checks exact days, we just show count
+              }).length
+              const fu2Due = leads.filter(l=>l.sequenceStatus==='Follow-up 1 Sent'&&!!l.followUp2Body).length
+              return(
+                <>
+                  <div className="stitle">Sequence Pipeline</div>
+                  <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:28,boxShadow:'var(--sh)'}}>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)'}}>
+                      {[
+                        {lbl:'Cold',val:seqCounts.cold,col:'var(--ink4)'},
+                        {lbl:'Email 1 Sent',val:seqCounts.email1,col:'var(--blue)'},
+                        {lbl:'FU1 Sent',val:seqCounts.fu1,col:'var(--yellow)'},
+                        {lbl:'FU2 Sent',val:seqCounts.fu2,col:'#d97706'},
+                        {lbl:'Replied',val:seqCounts.replied,col:'var(--green)'},
+                        {lbl:'Booked',val:seqCounts.booked,col:'var(--green)'},
+                        {lbl:'Opted Out',val:seqCounts.optedOut,col:'var(--red)'},
+                      ].map(({lbl,val,col},i,arr)=>(
+                        <div key={lbl} style={{padding:'18px 16px',borderRight:i<arr.length-1?'1px solid var(--b)':'none',textAlign:'center'}}>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:28,letterSpacing:'-1px',color:val>0?col:'var(--ink4)'}}>{val}</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:6}}>{lbl}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {(fu1Due>0||fu2Due>0)&&(
+                      <div style={{padding:'12px 20px',borderTop:'1px solid var(--b)',background:'#d9770608',display:'flex',alignItems:'center',gap:16}}>
+                        <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--yellow)'}}>⚡ Auto-scheduler active</span>
+                        {fu1Due>0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{fu1Due} leads awaiting FU1 (fires at 9am UTC when 5+ days since send)</span>}
+                        {fu2Due>0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{fu2Due} leads awaiting FU2</span>}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )
+            })()}
 
             <div className="stitle" style={{marginTop:24}}>System Log</div>
             <Logbox maxH="220px"/>
