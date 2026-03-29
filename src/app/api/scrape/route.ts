@@ -49,11 +49,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, targets: TARGETS })
   }
 
-  const target = TARGETS.find(t => t.org === org)
-  if (!target) return NextResponse.json({ ok: false, error: 'Org not found' }, { status: 404 })
+  // Accept any org — either from hardcoded list or dynamically discovered
+  const knownTarget = TARGETS.find(t => t.org === org)
+  const website = searchParams.get('website') || knownTarget?.web || ''
 
   try {
-    const website = target.web
     const [orgData, repos, members] = await Promise.all([
       ghFetch(`/orgs/${org}`, token || undefined),
       ghFetch(`/orgs/${org}/repos?sort=stars&per_page=5`, token || undefined),
@@ -145,12 +145,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       data: {
-        company: orgData.name || target.name,
-        website: orgData.blog || target.web,
+        company: orgData.name || knownTarget?.name || org,
+        website: orgData.blog || website || knownTarget?.web || `https://github.com/${org}`,
         description: orgData.description || '',
         githubOrgUrl: `https://github.com/${org}`,
         githubStars: stars,
-        companyType: target.type,
+        companyType: searchParams.get('type') || knownTarget?.type || 'AI/ML Startup',
         topRepos,
         aiTools: aiTools || 'AI/ML tooling',
         // Enriched contact

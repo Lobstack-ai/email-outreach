@@ -336,6 +336,10 @@ export default function App(){
   const[provider,setProvider]=useState<'privateemail'|'gmail'>('privateemail')
   const[validation,setValidation]=useState<any>(null)
   const[validating,setValidating]=useState(false)
+  // Dynamic discovery
+  const[discovered,setDiscovered]=useState<any[]>([])
+  const[discovering,setDiscovering]=useState(false)
+  const[searchMode,setSearchMode]=useState<'discover'|'static'>('discover')
   const[log,setLog]=useState<Log[]>([])
   const logRef=useRef<HTMLDivElement>(null)
   const{ts,toast}=useToast()
@@ -375,30 +379,53 @@ export default function App(){
     }catch(e:any){addLog(`✗ ${e.message}`,'e')}
   }
 
-  const scrapeOne=async(tgt:typeof TARGETS[0])=>{
-    setScrSt(p=>({...p,[tgt.org]:'running'}))
-    try{
-      const r=await fetch(`/api/scrape?org=${tgt.org}`).then(r=>r.json())
-      if(!r.ok)throw new Error(r.error)
-      setScraped(p=>({...p,[tgt.org]:r.data}))
-      setScrSt(p=>({...p,[tgt.org]:'done'}))
-      addLog(`  ✓ ${tgt.name} ⭐${r.data.githubStars?.toLocaleString()}`,'o')
-    }catch(e:any){
-      setScrSt(p=>({...p,[tgt.org]:'fail'}))
-      addLog(`  ✗ ${tgt.name}: ${e.message}`,'e')
+  const discoverOrgs = async () => {
+    setDiscovering(true)
+    setDiscovered([])
+    addLog('=== Discovering new orgs from GitHub search ===', 'i')
+    try {
+      // Pass existing company names so discovery filters them out
+      const existingSlugs = leads.map(l => l.githubOrgUrl?.split('/').pop()?.toLowerCase() || '').filter(Boolean).join(',')
+      const r = await fetch(`/api/discover?queries=6&limit=60&existing=${existingSlugs}`).then(r => r.json())
+      if (!r.ok) throw new Error(r.error)
+      setDiscovered(r.orgs)
+      addLog(`✓ Discovered ${r.orgs.length} new orgs not in your CRM yet`, 'o')
+      addLog(`  Ran ${r.queriesRun} search queries across GitHub`, 'i')
+    } catch(e: any) {
+      addLog(`✗ Discovery: ${e.message}`, 'e')
+    }
+    setDiscovering(false)
+  }
+
+  const scrapeOne = async (tgt: {org: string; name: string; type: string; website?: string}) => {
+    setScrSt(p => ({...p, [tgt.org]: 'running'}))
+    try {
+      const websiteParam = tgt.website ? `&website=${encodeURIComponent(tgt.website)}` : ''
+      const typeParam = tgt.type ? `&type=${encodeURIComponent(tgt.type)}` : ''
+      const r = await fetch(`/api/scrape?org=${tgt.org}${websiteParam}${typeParam}`).then(r => r.json())
+      if (!r.ok) throw new Error(r.error)
+      setScraped(p => ({...p, [tgt.org]: r.data}))
+      setScrSt(p => ({...p, [tgt.org]: 'done'}))
+      addLog(`  ✓ ${tgt.name || tgt.org} ⭐${r.data.githubStars?.toLocaleString()}`, 'o')
+    } catch(e: any) {
+      setScrSt(p => ({...p, [tgt.org]: 'fail'}))
+      addLog(`  ✗ ${tgt.name || tgt.org}: ${e.message}`, 'e')
     }
   }
 
-  const scrapeAll=async()=>{
-    addLog('=== Scraping GitHub orgs ===','i')
-    const rl=await fetch('/api/scrape?org=ratelimit').then(r=>r.json()).catch(()=>null)
-    if(rl?.ok)addLog(`GitHub: ${rl.remaining}/${rl.limit} req remaining`,rl.remaining<40?'w':'i')
-    for(const tgt of TARGETS){
-      if(scrSt[tgt.org]==='done')continue
+  const scrapeAll = async () => {
+    const targets = searchMode === 'discover' && discovered.length > 0
+      ? discovered.map(o => ({ org: o.org, name: o.name, type: o.type, website: o.website }))
+      : TARGETS
+    addLog(`=== Scraping ${targets.length} orgs ===`, 'i')
+    const rl = await fetch('/api/scrape?org=ratelimit').then(r=>r.json()).catch(()=>null)
+    if (rl?.ok) addLog(`GitHub: ${rl.remaining}/${rl.limit} req remaining`, rl.remaining<40?'w':'i')
+    for (const tgt of targets) {
+      if (scrSt[tgt.org] === 'done') continue
       await scrapeOne(tgt)
-      await new Promise(r=>setTimeout(r,250))
+      await new Promise(r => setTimeout(r, 250))
     }
-    addLog('=== Scrape complete ===','o')
+    addLog('=== Scrape complete ===', 'o')
     toast(`${Object.values(scrSt).filter(s=>s==='done').length} orgs scraped`)
   }
 
@@ -763,60 +790,144 @@ export default function App(){
           {tab==='scrape'&&<>
             <div className="ph">
               <div className="ph-t">GitHub Lead Scraper</div>
-              <div className="ph-s">Enriching {TARGETS.length} AI-forward orgs — star counts, repo data, AI tool detection</div>
+              <div className="ph-s">Discover fresh AI-forward companies from live GitHub search — new orgs every time</div>
             </div>
-            <div className="card">
-              <div className="card-hd">
-                <div className="ct">Target Orgs</div>
+
+            {/* MODE TOGGLE + CONTROLS */}
+            <div className="card" style={{padding:'16px 20px',marginBottom:14}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+                <div style={{display:'flex',gap:8}}>
+                  {([
+                    {id:'discover',label:'🔍 Discover New',sub:'Live GitHub search — filters out existing CRM orgs'},
+                    {id:'static', label:'📌 Classic List', sub:'20 hand-picked AI orgs'},
+                  ] as {id:string;label:string;sub:string}[]).map(m=>(
+                    <button key={m.id} onClick={()=>{setSearchMode(m.id as any);setScraped({});setScrSt({})}}
+                      style={{padding:'10px 16px',borderRadius:'var(--r)',cursor:'pointer',border:`1.5px solid ${searchMode===m.id?'var(--red2)':'var(--b2)'}`,background:searchMode===m.id?'#E8414205':'var(--s2)',textAlign:'left',transition:'all .15s'}}>
+                      <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:searchMode===m.id?'var(--red2)':'var(--ink)',marginBottom:2}}>{m.label}</div>
+                      <div style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>{m.sub}</div>
+                    </button>
+                  ))}
+                </div>
                 <div className="btn-row">
-                  <button className="btn btn-dark" onClick={scrapeAll} disabled={Object.values(scrSt).some(s=>s==='running')}>Scrape All</button>
-                  <button className="btn btn-red" onClick={saveToAirtable} disabled={!scCnt}>↑ Save {scCnt} to CRM</button>
+                  {searchMode==='discover'&&(
+                    <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
+                      {discovering?'Searching GitHub...':'🔍 Discover Orgs'}
+                    </button>
+                  )}
+                  <button className="btn btn-dark"
+                    onClick={scrapeAll}
+                    disabled={Object.values(scrSt).some(s=>s==='running')||(searchMode==='discover'&&!discovered.length)}>
+                    Enrich All
+                  </button>
+                  <button className="btn btn-red" onClick={saveToAirtable} disabled={!scCnt}>
+                    ↑ Save {scCnt} to CRM
+                  </button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>loadLeads()}>↻ Reload</button>
                 </div>
               </div>
-              {health?.github?.remaining<40&&(
-                <div className="alert aw mb16">
-                  <span className="alert-icon">⚡</span>
-                  <div className="alert-body">
-                    <div className="alert-title">Low rate limit — {health.github.remaining} requests left</div>
-                    {health.github.authenticated?'Wait for the hourly reset.':'Add GITHUB_TOKEN to Vercel for 5,000 req/hr.'}
+            </div>
+
+            {/* DISCOVER MODE */}
+            {searchMode==='discover'&&(
+              <div className="card">
+                <div className="card-hd">
+                  <div className="ct">
+                    Discovered Orgs
+                    {discovered.length>0&&<span style={{color:'var(--green)',fontSize:11,fontWeight:400,marginLeft:8}}>
+                      {discovered.length} new · not in your CRM
+                    </span>}
                   </div>
                 </div>
-              )}
-              <div className="sg">
-                {TARGETS.map(tgt=>{
-                  const st=scrSt[tgt.org]||'idle',d=scraped[tgt.org]
-                  return(
-                    <div key={tgt.org} className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                      onClick={()=>(st==='idle'||st==='fail')&&scrapeOne(tgt)}>
-                      <div className="sn">{tgt.name}</div>
-                      <div className="stype">{tgt.type}</div>
-                      {d?<>
-                        <div className="sstar">⭐ {d.githubStars?.toLocaleString()}</div>
-                        <div className="srepo">{d.topRepos}</div>
-                        {d.contactEmail ? (
-                          <div className="sst" style={{color:d.contactConfidence==='verified'?'var(--green)':'var(--yellow)'}}>
-                            {d.contactConfidence==='verified'?'✓ ':'\~ '}{d.contactEmail}
-                          </div>
-                        ) : (
-                          <div className="sst" style={{color:'var(--ink4)'}}>no email found</div>
-                        )}
-                      </>:(
-                        <div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
-                          {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
-                        </div>
-                      )}
+                {discovering&&(
+                  <div style={{padding:'40px 0',textAlign:'center',color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:12}}>
+                    <div style={{marginBottom:12}}>Searching GitHub across 6 queries for AI-forward orgs...</div>
+                    <div style={{width:240,margin:'0 auto',height:3,background:'var(--b)',borderRadius:2,overflow:'hidden'}}>
+                      <div style={{height:'100%',width:'60%',background:'var(--grad)',borderRadius:2,animation:'none'}}/>
                     </div>
-                  )
-                })}
+                  </div>
+                )}
+                {!discovering&&discovered.length===0&&(
+                  <div className="empty">
+                    <div className="empty-ico">🔍</div>
+                    <div className="empty-t">Click Discover Orgs to find fresh leads</div>
+                    <div className="empty-s">Runs 6 parallel GitHub searches for orgs actively building with AI agents, LLMs, and developer tools. Automatically excludes any company already in your CRM.</div>
+                  </div>
+                )}
+                {discovered.length>0&&(
+                  <div className="sg">
+                    {discovered.map((org:any)=>{
+                      const st=scrSt[org.org]||'idle', d=scraped[org.org]
+                      return(
+                        <div key={org.org}
+                          className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
+                          onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website})}>
+                          <div className="sn">{org.name}</div>
+                          <div className="stype">{org.type}</div>
+                          <div className="sstar">⭐ {org.stars?.toLocaleString()}</div>
+                          {d?<>
+                            <div className="srepo">{d.topRepos}</div>
+                            {d.contactEmail
+                              ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
+                              :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
+                          </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
+                            {st==='running'?'Enriching...':st==='fail'?'Failed — retry':'Click to enrich'}
+                          </div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
+
+            {/* STATIC MODE */}
+            {searchMode==='static'&&(
+              <div className="card">
+                <div className="card-hd">
+                  <div className="ct">Classic Target List</div>
+                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{TARGETS.length} hand-picked orgs</span>
+                </div>
+                {health?.github?.remaining<40&&(
+                  <div className="alert aw mb16">
+                    <span className="alert-icon">⚡</span>
+                    <div className="alert-body">
+                      <div className="alert-title">Low rate limit — {health.github.remaining} requests left</div>
+                      {health.github.authenticated?'Wait for hourly reset.':'Add GITHUB_TOKEN to Vercel for 5,000 req/hr.'}
+                    </div>
+                  </div>
+                )}
+                <div className="sg">
+                  {TARGETS.map(tgt=>{
+                    const st=scrSt[tgt.org]||'idle', d=scraped[tgt.org]
+                    return(
+                      <div key={tgt.org}
+                        className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
+                        onClick={()=>(st==='idle'||st==='fail')&&scrapeOne(tgt)}>
+                        <div className="sn">{tgt.name}</div>
+                        <div className="stype">{tgt.type}</div>
+                        {d?<>
+                          <div className="sstar">⭐ {d.githubStars?.toLocaleString()}</div>
+                          <div className="srepo">{d.topRepos}</div>
+                          {d.contactEmail
+                            ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
+                            :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
+                        </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
+                          {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
+                        </div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="card">
-              <div className="ct" style={{marginBottom:14}}>Scrape Log</div>
+              <div className="ct" style={{marginBottom:14}}>Log</div>
               <Logbox/>
             </div>
           </>}
 
+          {/* ══ CRM ══ */}
           {/* ══ CRM ══ */}
           {tab==='crm'&&<>
             <div className="ph">
