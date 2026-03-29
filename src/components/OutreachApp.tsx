@@ -803,7 +803,6 @@ export default function App(){
               <div className="card">
                 <div className="card-hd">
                   <div className="ct">Environment Variables</div>
-                  <a href="https://vercel.com/socialblocklabs/email-outreach/settings/environment-variables" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-xs">Open Vercel ↗</a>
                 </div>
                 <div className="cklist">
                   {[
@@ -883,30 +882,20 @@ export default function App(){
               <div className="ph-s">Discover fresh AI-forward companies · filter by metrics · enrich with contact emails</div>
             </div>
 
-            {/* MODE TOGGLE + ACTION BAR */}
+            {/* ACTION BAR */}
             <div className="card" style={{padding:'16px 20px',marginBottom:12}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-                <div style={{display:'flex',gap:8}}>
-                  {([
-                    {id:'discover',label:'🔍 Discover New',sub:'Live GitHub search, filters out existing CRM orgs'},
-                    {id:'static', label:'📌 Classic List', sub:'20 hand-picked AI orgs'},
-                  ] as {id:string;label:string;sub:string}[]).map(m=>(
-                    <button key={m.id} onClick={()=>{setSearchMode(m.id as any);setScraped({});setScrSt({})}}
-                      style={{padding:'10px 16px',borderRadius:'var(--r)',cursor:'pointer',border:`1.5px solid ${searchMode===m.id?'var(--red2)':'var(--b2)'}`,background:searchMode===m.id?'#E8414205':'var(--s2)',textAlign:'left',transition:'all .15s'}}>
-                      <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:searchMode===m.id?'var(--red2)':'var(--ink)',marginBottom:2}}>{m.label}</div>
-                      <div style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>{m.sub}</div>
-                    </button>
-                  ))}
+                <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)'}}>
+                  🔍 Discover New Orgs
+                  <span style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',fontWeight:400,marginLeft:8}}>Live GitHub search · filters out existing CRM leads</span>
                 </div>
                 <div className="btn-row">
-                  {searchMode==='discover'&&(
-                    <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
-                      {discovering?'Searching...':'🔍 Discover Orgs'}
-                    </button>
-                  )}
+                  <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
+                    {discovering?'Searching...':'🔍 Discover Orgs'}
+                  </button>
                   <button className="btn btn-dark"
                     onClick={scrapeAll}
-                    disabled={Object.values(scrSt).some(s=>s==='running')||(searchMode==='discover'&&!discovered.length)}>
+                    disabled={Object.values(scrSt).some(s=>s==='running')||!discovered.length}>
                     Enrich All
                   </button>
                   <button className="btn btn-red" onClick={saveToAirtable} disabled={!scCnt}>↑ Save {scCnt} to CRM</button>
@@ -979,7 +968,7 @@ export default function App(){
             </div>
 
             {/* DISCOVER MODE */}
-            {searchMode==='discover'&&(()=>{
+            {(()=>{
               const sortFn=(a:any,b:any)=>{
                 if(filterSortBy==='stars')   return (b.stars||0)-(a.stars||0)
                 if(filterSortBy==='forks')   return (b.forks||0)-(a.forks||0)
@@ -1056,68 +1045,6 @@ export default function App(){
               )
             })()}
 
-            {/* STATIC MODE */}
-            {searchMode==='static'&&(()=>{
-              const sortFn=(a:any,b:any)=>{
-                const da=scraped[a.org], db=scraped[b.org]
-                if(!da&&!db) return 0
-                if(!da) return 1; if(!db) return -1
-                if(filterSortBy==='stars')   return (db.githubStars||0)-(da.githubStars||0)
-                if(filterSortBy==='forks')   return (db.githubForks||0)-(da.githubForks||0)
-                if(filterSortBy==='members') return (db.orgMembers||0)-(da.orgMembers||0)
-                if(filterSortBy==='watchers')return (db.githubWatchers||0)-(da.githubWatchers||0)
-                return (db.leadScore||0)-(da.leadScore||0)
-              }
-              const filtered = TARGETS
-                .filter(tgt=>{
-                  const d=scraped[tgt.org]
-                  if(!d) return filterMinStars===0&&filterMinForks===0&&filterMinMembers===0&&filterMinScore===0&&!filterShowHasEmail
-                  if(filterMinStars>0&&(d.githubStars||0)<filterMinStars) return false
-                  if(filterMinForks>0&&(d.githubForks||0)<filterMinForks) return false
-                  if(filterMinMembers>0&&(d.orgMembers||0)<filterMinMembers) return false
-                  if(filterMinScore>0&&(d.leadScore||0)<filterMinScore) return false
-                  if(filterShowHasEmail&&!d.contactEmail) return false
-                  return true
-                })
-                .sort(sortFn)
-              return(
-                <div className="card">
-                  <div className="card-hd">
-                    <div className="ct">Classic Target List</div>
-                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
-                      {filtered.length}/{TARGETS.length} shown
-                    </span>
-                  </div>
-                  <div className="sg">
-                    {filtered.map(tgt=>{
-                      const st=scrSt[tgt.org]||'idle', d=scraped[tgt.org]
-                      const score=d?.leadScore
-                      return(
-                        <div key={tgt.org}
-                          className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                          onClick={()=>(st==='idle'||st==='fail')&&scrapeOne(tgt)}>
-                          <div className="sn">{tgt.name}</div>
-                          <div className="stype">{tgt.type}</div>
-                          {d?<>
-                            <div className="sstar">⭐ {(d.githubStars||0).toLocaleString()}</div>
-                            <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
-                              {d.githubForks>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>⑂{d.githubForks}</span>}
-                              {d.orgMembers>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>👥{d.orgMembers}</span>}
-                              {score>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:score>=70?'#16a34a15':score>=40?'#d9770615':'var(--s3)',color:score>=70?'var(--green)':score>=40?'var(--yellow)':'var(--ink3)'}}>{score}</span>}
-                            </div>
-                            {d.contactEmail
-                              ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
-                              :<div className="sst" style={{color:'var(--ink4)'}}>no email found</div>}
-                          </>:<div className="sst" style={{color:st==='running'?'var(--yellow)':st==='fail'?'var(--red)':'var(--ink4)'}}>
-                            {st==='running'?'Scraping...':st==='fail'?'Failed — retry':'Click to scrape'}
-                          </div>}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )
-            })()}
 
             <div className="card">
               <div className="ct" style={{marginBottom:14}}>Log</div>
