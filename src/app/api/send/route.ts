@@ -84,6 +84,7 @@ ${body.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^/,'<p>').repla
 
     const info = await transporter.sendMail({
       from: `${name} <${from}>`,
+      replyTo: `${name} <inbound@replies.lobstack.ai>`,
       to,
       subject,
       text: body + '\n\n---\nTo unsubscribe, reply with "unsubscribe".',

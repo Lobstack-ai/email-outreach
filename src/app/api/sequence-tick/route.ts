@@ -39,6 +39,7 @@ async function sendEmail(to: string, subject: string, body: string) {
   await t.verify()
   const info = await t.sendMail({
     from: `The Lobstack Team <${from}>`,
+    replyTo: `The Lobstack Team <inbound@replies.lobstack.ai>`,
     to, subject,
     text: body + '\n\n---\nTo unsubscribe reply with "unsubscribe".',
     html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:600px">
