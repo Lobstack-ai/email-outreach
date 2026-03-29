@@ -420,13 +420,22 @@ export default function App(){
     setDiscovered([])
     addLog('=== Discovering new orgs from GitHub search ===', 'i')
     try {
-      // Pass existing company names so discovery filters them out
-      const existingSlugs = leads.map(l => l.githubOrgUrl?.split('/').pop()?.toLowerCase() || '').filter(Boolean).join(',')
-      const r = await fetch(`/api/discover?queries=6&limit=60&existing=${existingSlugs}`).then(r => r.json())
+      // Build existing set from GitHub org URLs — extract the slug from the URL
+      const existingSlugs = leads
+        .map(l => {
+          const url = l.githubOrgUrl || ''
+          // Extract slug from https://github.com/orgname or https://github.com/orgname/repo
+          const match = url.match(/github\.com\/([^\/\s]+)/i)
+          return match ? match[1].toLowerCase() : ''
+        })
+        .filter(Boolean)
+      const existingParam = existingSlugs.join(',')
+      addLog(`  Excluding ${existingSlugs.length} orgs already in CRM`, 'i')
+      const r = await fetch(`/api/discover?queries=8&limit=60&existing=${existingParam}`).then(r => r.json())
       if (!r.ok) throw new Error(r.error)
       setDiscovered(r.orgs)
-      addLog(`✓ Discovered ${r.orgs.length} new orgs not in your CRM yet`, 'o')
-      addLog(`  Ran ${r.queriesRun} search queries across GitHub`, 'i')
+      addLog(`✓ Discovered ${r.orgs.length} new orgs not in your CRM`, 'o')
+      if (r.queriesUsed?.length) addLog(`  Queries: ${r.queriesUsed.slice(0,3).join(' · ')}...`, 'i')
     } catch(e: any) {
       addLog(`✗ Discovery: ${e.message}`, 'e')
     }
