@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
 
   const pass = smtpPass || process.env.SMTP_PASSWORD
   const from = fromEmail || process.env.SMTP_EMAIL
-  const name = fromName || process.env.SMTP_NAME || 'The Lobstack Team'
+  const name = fromName || process.env.SMTP_NAME || 'Brandon @ Lobstack'
 
   if (!pass || !from)   return NextResponse.json({ ok: false, error: 'SMTP credentials not configured' }, { status: 400 })
   if (!to || !subject || !body) return NextResponse.json({ ok: false, error: 'Missing to, subject, or body' }, { status: 400 })

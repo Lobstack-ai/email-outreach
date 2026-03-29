@@ -359,6 +359,8 @@ export default function App(){
   const[sel,setSel]=useState<Set<string>>(new Set())
   const[genning,setGenning]=useState(false)
   const[genPct,setGenPct]=useState(0)
+  const[regenning,setRegenning]=useState(false)
+  const[regenProgress,setRegenProgress]=useState({done:0,total:0})
   const[sending,setSending]=useState(false)
   const[sendPct,setSendPct]=useState(0)
   const[preview,setPreview]=useState<Lead|null>(null)
@@ -505,6 +507,15 @@ export default function App(){
         if(d.contactName)  fields['Contact Name']  = d.contactName
         if(d.contactEmail) fields['Contact Email'] = d.contactEmail
         if(d.contactTitle) fields['Job Title'] = d.contactTitle + (d.contactConfidence==='inferred'?' (inferred)':' (verified)')
+        if(d.contactConfidence){
+          const confMap: Record<string,string> = {
+            'verified':    'GitHub public',
+            'inferred':    'Pattern inferred',
+            'org-contact': 'Org contact',
+          }
+          const hunterConf = typeof d.contactConfidence==='string'&&d.contactConfidence.startsWith('hunter-')
+          fields['Email Confidence'] = hunterConf ? 'Hunter verified' : (confMap[d.contactConfidence]||'Unknown')
+        }
 
         const r=await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({action:'create',fields})}).then(r=>r.json())
@@ -562,6 +573,45 @@ export default function App(){
     setGenning(false)
     addLog('=== Sequences complete ===','o')
     toast('3-part sequences generated and saved','o')
+  }
+
+  const regenAllEmails=async()=>{
+    const targets=leads.filter(l=>l.emailBody) // only leads that already have emails
+    if(!targets.length){toast('No emails to regenerate','w');return}
+    if(!confirm(`Regenerate emails for all ${targets.length} leads using updated prompt? This will overwrite existing emails.`))return
+    setRegenning(true)
+    setRegenProgress({done:0,total:targets.length})
+    addLog(`=== Regenerating ${targets.length} email sequences (new prompt: no dashes, call CTA) ===`,'i')
+    let done=0,errors=0
+    // Process in batches of 8 via regenerate API
+    const batchSize=8
+    for(let i=0;i<targets.length;i+=batchSize){
+      const batch=targets.slice(i,i+batchSize)
+      try{
+        const r=await fetch('/api/regenerate',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({recordIds:batch.map(l=>l.id),senderName:'Brandon @ Lobstack'})
+        }).then(r=>r.json())
+        if(r.ok){
+          done+=r.results.filter((x:any)=>x.ok).length
+          errors+=r.results.filter((x:any)=>!x.ok).length
+          r.results.forEach((x:any)=>{
+            if(x.ok) addLog(`  ✓ ${x.company}`,'o')
+            else addLog(`  ✗ ${x.company}: ${x.error}`,'e')
+          })
+        }
+      }catch(e:any){
+        addLog(`  Batch error: ${e.message}`,'e')
+        errors+=batch.length
+      }
+      setRegenProgress({done:Math.min(i+batchSize,targets.length),total:targets.length})
+      if(i+batchSize<targets.length) await new Promise(r=>setTimeout(r,1000))
+    }
+    setRegenning(false)
+    addLog(`=== Regeneration complete: ${done} updated, ${errors} errors ===`,errors?'w':'o')
+    toast(`${done} emails regenerated${errors?' · '+errors+' errors':''}`, errors?'w':'o')
+    await loadLeads(true)
   }
 
   const validateLeads=async()=>{
@@ -825,6 +875,7 @@ export default function App(){
                     {key:'SMTP_EMAIL',ok:!!health.env?.smtpEmail,hint:health.env?.smtpEmailVal||'hello@lobstack.ai'},
                     {key:'SMTP_PASSWORD',ok:!!health.env?.smtpPass,hint:'Your PrivateEmail account password'},
                     {key:'GITHUB_TOKEN',ok:!!health.env?.githubToken,hint:'Optional — upgrades scraper from 60 to 5,000 req/hr'},
+                    {key:'HUNTER_API_KEY',ok:!!health.env?.hunterKey,hint:'Optional — hunter.io for 3× more contact emails. Free: 25/mo'},
                   ].map(({key,ok,hint})=>(
                     <div key={key} className="erow">
                       <span className={ok?'eok':'emiss'}>{ok?'✓':'○'}</span>
@@ -884,6 +935,71 @@ export default function App(){
                 </>
               )
             })()}
+
+            {/* DOMAIN WARMUP TRACKER */}
+            {(()=>{
+              const daysSinceFirst = stats.sent>0 ? Math.floor((Date.now()-new Date('2026-03-28').getTime())/86400000) : 0
+              const weekNum = Math.max(1,Math.ceil(daysSinceFirst/7))
+              const dailyTarget = weekNum===1?10:weekNum===2?20:weekNum===3?35:50
+              const warmupPct = Math.min(100,Math.round((stats.sent/(dailyTarget*7*weekNum))*100))
+              return stats.sent>0&&(
+                <>
+                  <div className="stitle" style={{marginTop:24}}>Domain Warmup</div>
+                  <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)'}}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:16,marginBottom:16}}>
+                      {[
+                        {lbl:'Week 1',target:'~10/day',status:weekNum>=1?'done':'upcoming'},
+                        {lbl:'Week 2',target:'~20/day',status:weekNum>=2?'done':weekNum===1?'active':'upcoming'},
+                        {lbl:'Week 3',target:'~35/day',status:weekNum>=3?'done':weekNum===2?'active':'upcoming'},
+                        {lbl:'Week 4+',target:'~50/day',status:weekNum>=4?'active':'upcoming'},
+                      ].map(w=>(
+                        <div key={w.lbl} style={{padding:'12px 14px',borderRadius:'var(--r)',background:w.status==='active'?'#E8414208':w.status==='done'?'#16a34a08':'var(--s2)',border:`1px solid ${w.status==='active'?'var(--red2)':w.status==='done'?'#16a34a30':'var(--b)'}`,textAlign:'center'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:10,color:w.status==='active'?'var(--red2)':w.status==='done'?'var(--green)':'var(--ink4)',fontWeight:700,marginBottom:4}}>{w.lbl}</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:11,color:w.status==='upcoming'?'var(--ink4)':'var(--ink)'}}>{w.target}</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:w.status==='active'?'var(--red2)':w.status==='done'?'var(--green)':'var(--ink4)',marginTop:4}}>{w.status==='active'?'← NOW':w.status==='done'?'✓ DONE':'—'}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexShrink:0}}>{stats.sent} sent total</span>
+                      <div style={{flex:1,height:4,background:'var(--b2)',borderRadius:2,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:`${warmupPct}%`,background:'var(--red2)',borderRadius:2,transition:'width .3s'}}/>
+                      </div>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexShrink:0}}>Week {weekNum} · {dailyTarget}/day target</span>
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
+
+            {/* HUNTER.IO SETUP PROMPT */}
+            {!health?.env?.hunterKey&&(
+              <>
+                <div className="stitle" style={{marginTop:24}}>Improve Email Discovery</div>
+                <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)',display:'flex',alignItems:'flex-start',gap:16}}>
+                  <div style={{fontSize:20,flexShrink:0}}>🎯</div>
+                  <div>
+                    <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:4}}>Add Hunter.io for 3× more contact emails</div>
+                    <div style={{fontFamily:'var(--body)',fontSize:12,color:'var(--ink3)',lineHeight:1.6,marginBottom:12}}>
+                      Currently finding emails from GitHub public profiles and pattern inference. Hunter.io finds verified corporate emails from domain search — dramatically improves hit rate for orgs without public GitHub emails.
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                      <a href="https://hunter.io/users/sign_up" target="_blank" rel="noopener noreferrer" className="btn btn-dark btn-sm" style={{textDecoration:'none'}}>Get free API key →</a>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Free: 25 searches/mo · Starter: $49/mo for 500</span>
+                    </div>
+                    <div style={{marginTop:12,fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)'}}>
+                      Add <code style={{background:'var(--s3)',padding:'1px 6px',borderRadius:3}}>HUNTER_API_KEY</code> in Vercel → Settings → Environment Variables, then redeploy
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+            {health?.env?.hunterKey&&(
+              <div style={{marginTop:8,marginBottom:20,display:'flex',alignItems:'center',gap:8,fontFamily:'var(--mono)',fontSize:11}}>
+                <span style={{color:'var(--green)'}}>✓</span>
+                <span style={{color:'var(--ink3)'}}>Hunter.io connected — email enrichment active on all new scrapes</span>
+              </div>
+            )}
 
             <div className="stitle" style={{marginTop:24}}>System Log</div>
             <Logbox maxH="220px"/>
@@ -1191,9 +1307,15 @@ export default function App(){
               <div className="card-hd">
                 <div className="ct">Generate Emails</div>
                 <div className="btn-row">
-                  <button className="btn btn-dark" onClick={genEmails} disabled={genning||!leads.length||!health?.env?.anthropic}>
+                  <button className="btn btn-dark" onClick={genEmails} disabled={genning||regenning||!leads.length||!health?.env?.anthropic}>
                     {genning?'Generating...':'✦ Generate'}
                   </button>
+                  {stats.hasEmail>0&&(
+                    <button className="btn btn-ghost btn-sm" onClick={regenAllEmails} disabled={genning||regenning}
+                      title="Regenerate all existing emails with improved prompt (no dashes, call CTA)">
+                      {regenning?`↻ ${regenProgress.done}/${regenProgress.total}...`:'↻ Regen All'}
+                    </button>
+                  )}
                   <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{stats.hasEmail}/{stats.total} done</span>
                 </div>
               </div>
@@ -1204,6 +1326,12 @@ export default function App(){
                     <div className="alert-title">ANTHROPIC_API_KEY not configured</div>
                     Add it in Vercel → Settings → Environment Variables, then redeploy.
                   </div>
+                </div>
+              )}
+              {regenning&&(
+                <div className="pgwrap">
+                  <div className="pglbl"><span>Regenerating with improved prompt...</span><span>{regenProgress.done}/{regenProgress.total}</span></div>
+                  <div className="pgbar"><div className="pgfill" style={{width:`${Math.round((regenProgress.done/Math.max(regenProgress.total,1))*100)}%`}}/></div>
                 </div>
               )}
               {genning&&(

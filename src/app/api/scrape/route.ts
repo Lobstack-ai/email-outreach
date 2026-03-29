@@ -187,6 +187,42 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Hunter.io fallback — runs when GitHub enrichment found no email
+    if (!bestContact?.email && domain && process.env.HUNTER_API_KEY) {
+      try {
+        const hunterUrl = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&limit=3&api_key=${process.env.HUNTER_API_KEY}`
+        const hr = await fetch(hunterUrl)
+        if (hr.ok) {
+          const hd = await hr.json()
+          const emails = hd?.data?.emails || []
+          // Score by seniority keywords
+          const scored = emails
+            .filter((e: any) => e.value && e.confidence > 30)
+            .map((e: any) => {
+              let s = e.confidence || 0
+              const pos = (e.position || '').toLowerCase()
+              if (/cto|ceo|founder|vp|head|director/.test(pos)) s += 20
+              if (e.type === 'personal') s += 10
+              return { ...e, score: s }
+            })
+            .sort((a: any, b: any) => b.score - a.score)
+
+          const top = scored[0]
+          if (top) {
+            bestContact = {
+              name:       [top.first_name, top.last_name].filter(Boolean).join(' ') || orgData.name || org,
+              email:      top.value,
+              confidence: `hunter-${top.confidence}`,
+              title:      top.position || 'Hunter.io',
+              githubUrl:  `https://github.com/${org}`,
+            }
+          }
+        }
+      } catch {
+        // Hunter fallback is non-fatal
+      }
+    }
+
     const leadScore = computeLeadScore({
       stars, forks, watchers,
       memberCount:  Array.isArray(members) ? members.length : 0,
