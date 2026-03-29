@@ -18,21 +18,34 @@ export async function GET() {
     smtpEmailVal: process.env.SMTP_EMAIL || null,
   }
 
-  // Ping Airtable
+  // Ping Airtable and get real record counts via pagination
   try {
-    const r = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${LEADS_TABLE}?pageSize=1`, {
-      headers: { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` },
-    })
-    const d = await r.json()
-    if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`)
-    const leadsCount = d.metadata?.totalRecordCount ?? 0
+    // Count leads by paginating through all records
+    let leadsCount = 0
+    let offset: string | undefined
+    do {
+      const qs = offset ? `pageSize=100&offset=${offset}` : 'pageSize=100'
+      const r = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${LEADS_TABLE}?${qs}`, {
+        headers: { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` },
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`)
+      leadsCount += (d.records || []).length
+      offset = d.offset
+    } while (offset)
 
-    // Also get log count
-    const lr = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${LOG_TABLE}?pageSize=1`, {
-      headers: { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` },
-    })
-    const ld = await lr.json()
-    const logsCount = ld.metadata?.totalRecordCount ?? 0
+    // Count campaign log records
+    let logsCount = 0
+    let logOffset: string | undefined
+    do {
+      const qs = logOffset ? `pageSize=100&offset=${logOffset}` : 'pageSize=100'
+      const lr = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${LOG_TABLE}?${qs}`, {
+        headers: { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` },
+      })
+      const ld = await lr.json()
+      logsCount += (ld.records || []).length
+      logOffset = ld.offset
+    } while (logOffset)
 
     results.airtable = { ok: true, leadsCount, logsCount }
   } catch (e: any) {
