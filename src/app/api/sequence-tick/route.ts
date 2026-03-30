@@ -226,6 +226,11 @@ export async function GET(req: NextRequest) {
           'Status':           statusMap[classification.intent] || 'Replied',
           'Sequence Status':  statusMap[classification.intent] || 'Replied',
           'Last Contacted':   now.toISOString().split('T')[0],
+          // Structured reply fields (used by Inbox tab)
+          'Reply Text':       reply.text.slice(0, 5000),
+          'Reply Intent':     classification.intent,
+          'Suggested Reply':  classification.suggestedResponse,
+          // Also keep in Personalization Notes for backwards compat
           'Personalization Notes':
             `[REPLY ${now.toLocaleDateString()} — ${classification.intent.toUpperCase()}]\n` +
             `${classification.summary}\n\n` +
@@ -325,6 +330,40 @@ export async function GET(req: NextRequest) {
           results.skipped++
         }
       }
+    }
+
+    // Send daily summary email to yourself if anything happened
+    const anythingHappened = results.repliesFound > 0 || results.fu1Sent > 0 || results.fu2Sent > 0 || results.errors > 0
+    if (anythingHappened && process.env.SMTP_EMAIL && process.env.SMTP_PASSWORD) {
+      try {
+        const nodemailer = require('nodemailer')
+        const t = nodemailer.createTransport({
+          host: 'mail.privateemail.com', port: 587, secure: false,
+          auth: { user: process.env.SMTP_EMAIL, pass: process.env.SMTP_PASSWORD },
+          tls: { rejectUnauthorized: false },
+        })
+        const summaryLines = [
+          `Lobstack Outreach — Daily Cron Summary`,
+          `${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`,
+          ``,
+          `Leads checked:    ${leads.length}`,
+          `New replies:      ${results.repliesFound}`,
+          `Follow-up 1 sent: ${results.fu1Sent}`,
+          `Follow-up 2 sent: ${results.fu2Sent}`,
+          `Skipped:          ${results.skipped}`,
+          `Errors:           ${results.errors}`,
+          ``,
+          results.repliesFound > 0 ? `→ Open Inbox tab to respond to ${results.repliesFound} repl${results.repliesFound===1?'y':'ies'}` : '',
+        ].filter(l => l !== undefined).join('\n')
+
+        await t.sendMail({
+          from:    `Lobstack Cron <${process.env.SMTP_EMAIL}>`,
+          to:      process.env.SMTP_EMAIL,
+          subject: `[Outreach] ${results.repliesFound > 0 ? `🔥 ${results.repliesFound} new repl${results.repliesFound===1?'y':'ies'}` : `${results.fu1Sent + results.fu2Sent} follow-ups sent`}`,
+          text:    summaryLines,
+        })
+        t.close()
+      } catch { /* summary email is non-fatal */ }
     }
 
     return NextResponse.json({

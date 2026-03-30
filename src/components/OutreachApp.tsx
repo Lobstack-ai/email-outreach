@@ -39,6 +39,8 @@ type Lead={
   // Sequence emails
   followUp1Subject:string; followUp1Body:string;
   followUp2Subject:string; followUp2Body:string;
+  // Reply fields
+  replyText:string; replyIntent:string; suggestedReply:string; replySent:boolean;
 }
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
@@ -84,6 +86,11 @@ function mapRecord(r:any):Lead{
     followUp1Body:    g('Follow-up 1 Body'),
     followUp2Subject: g('Follow-up 2 Subject'),
     followUp2Body:    g('Follow-up 2 Body'),
+    // Reply
+    replyText:     g('Reply Text'),
+    replyIntent:   g('Reply Intent'),
+    suggestedReply: g('Suggested Reply'),
+    replySent:     !!(f['Reply Sent']),
   }
 }
 
@@ -365,6 +372,10 @@ export default function App(){
   const[sendPct,setSendPct]=useState(0)
   const[preview,setPreview]=useState<Lead|null>(null)
   const[provider,setProvider]=useState<'privateemail'|'gmail'>('privateemail')
+  // Inbox state
+  const[inboxLead,setInboxLead]=useState<Lead|null>(null)
+  const[replyDraft,setReplyDraft]=useState<Record<string,string>>({})
+  const[sendingReply,setSendingReply]=useState<string|null>(null)
   const[validation,setValidation]=useState<any>(null)
   const[validating,setValidating]=useState(false)
   // Dynamic discovery
@@ -745,6 +756,7 @@ export default function App(){
             {id:'crm',label:'CRM',num:stats.total||null},
             {id:'generate',label:'Generate',num:stats.hasEmail||null},
             {id:'send',label:'Send',num:readyCnt||null,warn:readyCnt===0&&stats.hasEmail>0&&stats.hasContact>0},
+            {id:'inbox',label:'Inbox',num:stats.replied||null,warn:false},
           ].map(({id,label,num,warn})=>(
             <button key={id} className={`nb ${tab===id?'active':''}`} onClick={()=>setTab(id)}>
               {label}
@@ -1574,6 +1586,193 @@ export default function App(){
               <Logbox/>
             </div>
           </>}
+
+          {/* ══ INBOX ══ */}
+          {tab==='inbox'&&(()=>{
+            const replied   = leads.filter(l=>l.replyText||['Replied','Booked'].includes(l.sequenceStatus))
+            const pending   = replied.filter(l=>!l.replySent)
+            const done      = replied.filter(l=>l.replySent)
+            const active    = inboxLead || pending[0] || null
+
+            const intentColor=(i:string)=>i==='interested'?'var(--green)':i==='not_now'?'var(--yellow)':i==='question'?'var(--blue)':i==='unsubscribe'?'var(--red)':'var(--ink3)'
+            const intentBg=(i:string)=>i==='interested'?'#16a34a12':i==='not_now'?'#d9770612':i==='question'?'#2563eb12':i==='unsubscribe'?'#E8414212':'var(--s3)'
+            const intentLabel=(i:string)=>i==='interested'?'🔥 Interested':i==='not_now'?'⏳ Not Now':i==='question'?'❓ Question':i==='unsubscribe'?'🚫 Unsubscribe':'💬 Other'
+
+            const sendReply=async(lead:Lead)=>{
+              const draft=replyDraft[lead.id]||lead.suggestedReply||''
+              if(!draft.trim()){toast('Write a reply first','w');return}
+              setSendingReply(lead.id)
+              try{
+                const r=await fetch('/api/send-reply',{method:'POST',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({
+                    recordId:   lead.id,
+                    to:         lead.contactEmail,
+                    subject:    lead.emailSubject,
+                    body:       draft,
+                    inReplyToSubject: lead.emailSubject,
+                  })
+                }).then(r=>r.json())
+                if(!r.ok)throw new Error(r.error)
+                toast(`Reply sent to ${lead.company}`,'o')
+                setLeads(p=>p.map(l=>l.id===lead.id?{...l,replySent:true}:l))
+                // Move to next pending
+                const nextPending=pending.filter(p=>p.id!==lead.id)[0]
+                setInboxLead(nextPending||null)
+              }catch(e:any){toast(`Send failed: ${e.message}`,'e')}
+              setSendingReply(null)
+            }
+
+            return(
+              <>
+                <div className="ph">
+                  <div className="ph-t">Inbox</div>
+                  <div className="ph-s">Replies detected by IMAP · Claude classifies intent · reply in one click</div>
+                </div>
+
+                {replied.length===0?(
+                  <div className="card">
+                    <div className="empty">
+                      <div className="empty-ico">📬</div>
+                      <div className="empty-t">No replies yet</div>
+                      <div className="empty-s">When leads reply, Claude classifies them and they appear here for one-click response. Cron checks daily at 9am UTC.</div>
+                    </div>
+                  </div>
+                ):(
+                  <div style={{display:'grid',gridTemplateColumns:'280px 1fr',gap:16,alignItems:'start'}}>
+
+                    {/* LEFT: reply list */}
+                    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                      {pending.length>0&&(
+                        <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',padding:'0 4px',marginBottom:2}}>
+                          Needs reply · {pending.length}
+                        </div>
+                      )}
+                      {pending.map(lead=>(
+                        <div key={lead.id}
+                          onClick={()=>{setInboxLead(lead);setReplyDraft(p=>({...p,[lead.id]:p[lead.id]??lead.suggestedReply??''}))}}
+                          style={{background:'var(--s1)',border:`1.5px solid ${active?.id===lead.id?'var(--red2)':'var(--b)'}`,borderRadius:'var(--r)',padding:'12px 14px',cursor:'pointer',transition:'all .12s',boxShadow:active?.id===lead.id?'0 0 0 3px #E8414215':'var(--sh)'}}>
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                            <strong style={{fontSize:13}}>{lead.company}</strong>
+                            <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 7px',borderRadius:10,background:intentBg(lead.replyIntent),color:intentColor(lead.replyIntent)}}>
+                              {intentLabel(lead.replyIntent)}
+                            </span>
+                          </div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',marginBottom:4}}>{lead.contactEmail}</div>
+                          {lead.replyText&&<div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.4,maxHeight:36,overflow:'hidden'}}>{lead.replyText.slice(0,100)}{lead.replyText.length>100?'…':''}</div>}
+                        </div>
+                      ))}
+                      {done.length>0&&(
+                        <>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',padding:'8px 4px 2px',marginTop:4}}>
+                            Replied · {done.length}
+                          </div>
+                          {done.map(lead=>(
+                            <div key={lead.id}
+                              onClick={()=>{setInboxLead(lead);setReplyDraft(p=>({...p,[lead.id]:p[lead.id]??lead.suggestedReply??''}))}}
+                              style={{background:'var(--s2)',border:`1px solid ${active?.id===lead.id?'var(--red2)':'var(--b)'}`,borderRadius:'var(--r)',padding:'10px 14px',cursor:'pointer',opacity:.7,transition:'border .12s'}}>
+                              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                                <span style={{fontSize:12,fontWeight:600,color:'var(--ink3)'}}>{lead.company}</span>
+                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--green)'}}>✓ sent</span>
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+
+                    {/* RIGHT: active lead compose panel */}
+                    {active?(
+                      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+
+                        {/* Header */}
+                        <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',boxShadow:'var(--sh)'}}>
+                          <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:12}}>
+                            <div>
+                              <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:18,letterSpacing:'-.4px'}}>{active.company}</div>
+                              <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)',marginTop:3}}>{active.contactName&&<span>{active.contactName} · </span>}{active.contactEmail}</div>
+                            </div>
+                            <span style={{fontFamily:'var(--mono)',fontSize:11,padding:'4px 12px',borderRadius:20,background:intentBg(active.replyIntent),color:intentColor(active.replyIntent),fontWeight:600}}>
+                              {intentLabel(active.replyIntent)}
+                            </span>
+                          </div>
+                          {/* Their reply */}
+                          {active.replyText&&(
+                            <div style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'14px',border:'1px solid var(--b)',marginBottom:0}}>
+                              <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Their Reply</div>
+                              <div style={{fontSize:13,color:'var(--ink)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{active.replyText}</div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Original email context */}
+                        <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'16px 20px',boxShadow:'var(--sh)'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:10}}>Original Email Sent</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:'var(--ink)',marginBottom:8}}>{active.emailSubject}</div>
+                          <div style={{fontSize:12,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{active.emailBody?.slice(0,300)}{active.emailBody?.length>300?'…':''}</div>
+                        </div>
+
+                        {/* Reply compose */}
+                        <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',boxShadow:'var(--sh)'}}>
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+                            <div>
+                              <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:2}}>Your Reply</div>
+                              <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>To: {active.contactEmail} · Re: {active.emailSubject}</div>
+                            </div>
+                            {active.suggestedReply&&!(replyDraft[active.id])&&(
+                              <button className="btn btn-ghost btn-xs" onClick={()=>setReplyDraft(p=>({...p,[active.id]:active.suggestedReply}))}>
+                                Use Claude suggestion
+                              </button>
+                            )}
+                          </div>
+                          <textarea
+                            value={replyDraft[active.id]??active.suggestedReply??''}
+                            onChange={e=>setReplyDraft(p=>({...p,[active.id]:e.target.value}))}
+                            placeholder="Write your reply here, or click 'Use Claude suggestion' above..."
+                            style={{width:'100%',minHeight:140,fontFamily:'var(--body)',fontSize:13,lineHeight:1.6,padding:'12px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s2)',color:'var(--ink)',resize:'vertical',outline:'none',boxSizing:'border-box'}}
+                          />
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:12}}>
+                            <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)'}}>
+                              Sends from brandon@lobstack.ai · saved to Sent folder
+                            </div>
+                            <div style={{display:'flex',gap:8}}>
+                              {active.replyIntent==='unsubscribe'&&(
+                                <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--red)',padding:'4px 10px',background:'#E8414210',borderRadius:'var(--r)'}}>⚠ Unsubscribe — keep reply brief</span>
+                              )}
+                              <button
+                                className="btn btn-red"
+                                onClick={()=>sendReply(active)}
+                                disabled={sendingReply===active.id||active.replySent||(!replyDraft[active.id]&&!active.suggestedReply)}
+                              >
+                                {sendingReply===active.id?'Sending...'
+                                  :active.replySent?'✓ Reply Sent'
+                                  :'Send Reply →'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Claude suggested reply (read-only reference if already edited) */}
+                        {active.suggestedReply&&replyDraft[active.id]&&replyDraft[active.id]!==active.suggestedReply&&(
+                          <div style={{background:'var(--s2)',border:'1px solid var(--b)',borderRadius:'var(--r)',padding:'14px 16px'}}>
+                            <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Claude Original Suggestion</div>
+                            <div style={{fontSize:12,color:'var(--ink3)',lineHeight:1.5,whiteSpace:'pre-wrap'}}>{active.suggestedReply}</div>
+                          </div>
+                        )}
+
+                      </div>
+                    ):(
+                      <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'40px',textAlign:'center',boxShadow:'var(--sh)'}}>
+                        <div style={{fontSize:28,marginBottom:12}}>👆</div>
+                        <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:14,color:'var(--ink)',marginBottom:6}}>Select a reply to compose</div>
+                        <div style={{fontFamily:'var(--body)',fontSize:12,color:'var(--ink3)'}}>Click any lead on the left to open their reply and send a response</div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </>
+            )
+          })()}
 
         </div>
       </div>
