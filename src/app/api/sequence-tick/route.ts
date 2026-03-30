@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
 import { ImapFlow } from 'imapflow'
+import { sendDiscordNotification } from '@/lib/discord'
 
 const BASE   = 'appnF2fNAyEYnscvo'
 const LEADS  = 'tblMgthKziXfnIPBV'
@@ -180,6 +181,7 @@ export async function GET(req: NextRequest) {
   }
 
   const results = { repliesFound: 0, fu1Sent: 0, fu2Sent: 0, skipped: 0, errors: 0 }
+  const hotReplies: { company: string; intent: string; email: string }[] = []
   const now = new Date()
 
   try {
@@ -207,7 +209,7 @@ export async function GET(req: NextRequest) {
       const since = new Date(now.getTime() - 14 * 86400000) // look back 14 days
       const replies = await checkInboxForReplies(new Set(activeLookup.keys()), since)
 
-      for (const reply of replies) {
+    for (const reply of replies) {
         const record = activeLookup.get(reply.from.toLowerCase())
         if (!record) continue
 
@@ -249,7 +251,18 @@ export async function GET(req: NextRequest) {
                          : `Replied - ${classification.intent}`,
         })
 
-        // Remove from active lookup so we don't send follow-ups to them
+        // Send immediate Discord alert for each reply
+        sendDiscordNotification({
+          type:          'new_reply',
+          company,
+          contactName:   record.fields['Contact Name'] || '',
+          email:         reply.from,
+          intent:        classification.intent,
+          summary:       classification.summary,
+          suggestedReply: classification.suggestedResponse,
+        }).catch(() => {})
+
+        hotReplies.push({ company, intent: classification.intent, email: reply.from })
         activeLookup.delete(reply.from.toLowerCase())
         results.repliesFound++
       }
@@ -332,38 +345,18 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Send daily summary email to yourself if anything happened
+    // Send Discord cron summary (replaces email summary)
     const anythingHappened = results.repliesFound > 0 || results.fu1Sent > 0 || results.fu2Sent > 0 || results.errors > 0
-    if (anythingHappened && process.env.SMTP_EMAIL && process.env.SMTP_PASSWORD) {
-      try {
-        const nodemailer = require('nodemailer')
-        const t = nodemailer.createTransport({
-          host: 'mail.privateemail.com', port: 587, secure: false,
-          auth: { user: process.env.SMTP_EMAIL, pass: process.env.SMTP_PASSWORD },
-          tls: { rejectUnauthorized: false },
-        })
-        const summaryLines = [
-          `Lobstack Outreach — Daily Cron Summary`,
-          `${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`,
-          ``,
-          `Leads checked:    ${leads.length}`,
-          `New replies:      ${results.repliesFound}`,
-          `Follow-up 1 sent: ${results.fu1Sent}`,
-          `Follow-up 2 sent: ${results.fu2Sent}`,
-          `Skipped:          ${results.skipped}`,
-          `Errors:           ${results.errors}`,
-          ``,
-          results.repliesFound > 0 ? `→ Open Inbox tab to respond to ${results.repliesFound} repl${results.repliesFound===1?'y':'ies'}` : '',
-        ].filter(l => l !== undefined).join('\n')
-
-        await t.sendMail({
-          from:    `Lobstack Cron <${process.env.SMTP_EMAIL}>`,
-          to:      process.env.SMTP_EMAIL,
-          subject: `[Outreach] ${results.repliesFound > 0 ? `🔥 ${results.repliesFound} new repl${results.repliesFound===1?'y':'ies'}` : `${results.fu1Sent + results.fu2Sent} follow-ups sent`}`,
-          text:    summaryLines,
-        })
-        t.close()
-      } catch { /* summary email is non-fatal */ }
+    if (anythingHappened) {
+      sendDiscordNotification({
+        type:         'cron_summary',
+        leadsChecked: leads.length,
+        repliesFound: results.repliesFound,
+        fu1Sent:      results.fu1Sent,
+        fu2Sent:      results.fu2Sent,
+        errors:       results.errors,
+        hotReplies,
+      }).catch(() => {})
     }
 
     return NextResponse.json({

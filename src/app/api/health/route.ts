@@ -16,7 +16,8 @@ export async function GET() {
     smtpPass:    !!process.env.SMTP_PASSWORD,
     githubToken: !!process.env.GITHUB_TOKEN,
     smtpEmailVal: process.env.SMTP_EMAIL || null,
-    hunterKey:   !!process.env.HUNTER_API_KEY,
+    hunterKey:      !!process.env.HUNTER_API_KEY,
+    discordWebhook: !!process.env.DISCORD_WEBHOOK_URL,
   }
 
   // Ping Airtable and get real record counts via pagination

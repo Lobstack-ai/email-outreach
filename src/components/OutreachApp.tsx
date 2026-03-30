@@ -888,6 +888,7 @@ export default function App(){
                     {key:'SMTP_PASSWORD',ok:!!health.env?.smtpPass,hint:'Your PrivateEmail account password'},
                     {key:'GITHUB_TOKEN',ok:!!health.env?.githubToken,hint:'Optional — upgrades scraper from 60 to 5,000 req/hr'},
                     {key:'HUNTER_API_KEY',ok:!!health.env?.hunterKey,hint:'Optional — hunter.io for 3× more contact emails. Free: 25/mo'},
+                    {key:'DISCORD_WEBHOOK_URL',ok:!!health.env?.discordWebhook,hint:'Optional — get instant reply alerts in Discord. Channel → ⚙️ → Integrations → Webhooks'},
                   ].map(({key,ok,hint})=>(
                     <div key={key} className="erow">
                       <span className={ok?'eok':'emiss'}>{ok?'✓':'○'}</span>
@@ -1010,6 +1011,51 @@ export default function App(){
               <div style={{marginTop:8,marginBottom:20,display:'flex',alignItems:'center',gap:8,fontFamily:'var(--mono)',fontSize:11}}>
                 <span style={{color:'var(--green)'}}>✓</span>
                 <span style={{color:'var(--ink3)'}}>Hunter.io connected — email enrichment active on all new scrapes</span>
+              </div>
+            )}
+
+            {/* DISCORD SETUP / STATUS */}
+            {!health?.env?.discordWebhook?(
+              <>
+                <div className="stitle" style={{marginTop:24}}>Discord Notifications</div>
+                <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)',display:'flex',alignItems:'flex-start',gap:16}}>
+                  <div style={{fontSize:20,flexShrink:0}}>
+                    <svg width="22" height="22" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M60.1 4.9A58.5 58.5 0 0 0 45.4.7a.2.2 0 0 0-.2.1c-.6 1.1-1.3 2.6-1.8 3.7a54 54 0 0 0-16.2 0A38 38 0 0 0 25.4.8a.2.2 0 0 0-.2-.1 58.4 58.4 0 0 0-14.7 4.2.2.2 0 0 0-.1.1C1.6 18.7-.9 32.2.3 45.5a.2.2 0 0 0 .1.2 58.8 58.8 0 0 0 17.7 9 .2.2 0 0 0 .2-.1c1.4-1.9 2.6-3.9 3.6-6 .1-.2 0-.4-.2-.5a38.7 38.7 0 0 1-5.5-2.6.2.2 0 0 1 0-.4l1.1-.8a.2.2 0 0 1 .2 0c11.6 5.3 24.1 5.3 35.5 0a.2.2 0 0 1 .2 0l1.1.8a.2.2 0 0 1 0 .4 36.2 36.2 0 0 1-5.5 2.6c-.2.1-.3.3-.2.5 1.1 2 2.3 4 3.6 6a.2.2 0 0 0 .2.1 58.6 58.6 0 0 0 17.7-9 .2.2 0 0 0 .1-.2c1.5-15.4-2.5-28.8-10.5-40.7a.2.2 0 0 0-.1-.1zM23.7 37.8c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2c3.6 0 6.5 3.3 6.4 7.2 0 4-2.8 7.2-6.4 7.2zm23.7 0c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2c3.6 0 6.5 3.3 6.4 7.2 0 4-2.8 7.2-6.4 7.2z" fill="#5865F2"/>
+                    </svg>
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:4}}>Get instant reply alerts in Discord</div>
+                    <div style={{fontFamily:'var(--body)',fontSize:12,color:'var(--ink3)',lineHeight:1.6,marginBottom:12}}>
+                      When a lead replies, you'll get an immediate Discord message with their reply, intent classification, and Claude's suggested response. Daily cron summaries posted when follow-ups send.
+                    </div>
+                    <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)',background:'var(--s2)',borderRadius:'var(--r)',padding:'10px 14px',marginBottom:12,lineHeight:1.8}}>
+                      1. Open Discord → your server → any channel<br/>
+                      2. Click ⚙️ → Integrations → Webhooks → New Webhook<br/>
+                      3. Copy URL → add as <code style={{background:'var(--s3)',padding:'1px 6px',borderRadius:3,color:'var(--ink)'}}>DISCORD_WEBHOOK_URL</code> in Vercel env vars
+                    </div>
+                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                      <a href="https://discord.com/channels/@me" target="_blank" rel="noopener noreferrer" className="btn btn-dark btn-sm" style={{textDecoration:'none'}}>Open Discord →</a>
+                      <a href="https://vercel.com/dashboard" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Vercel env vars →</a>
+                      <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify?test=1').then(r=>r.json()).then(d=>toast(d.message||'Test sent','o'))}>
+                        Test webhook
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ):(
+              <div style={{marginTop:8,marginBottom:20,display:'flex',alignItems:'center',justifyContent:'space-between',background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r)',padding:'12px 16px',boxShadow:'var(--sh)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{color:'var(--green)',fontSize:16}}>✓</span>
+                  <div>
+                    <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink)',fontWeight:600}}>Discord connected</div>
+                    <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',marginTop:2}}>Reply alerts + cron summaries active</div>
+                  </div>
+                </div>
+                <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify?test=1').then(r=>r.json()).then(d=>toast(d.ok?'Test sent to Discord ✓':'Failed: '+d.message,d.ok?'o':'e'))}>
+                  Send test
+                </button>
               </div>
             )}
 
@@ -1610,6 +1656,7 @@ export default function App(){
                     subject:    lead.emailSubject,
                     body:       draft,
                     inReplyToSubject: lead.emailSubject,
+                    company:          lead.company,
                   })
                 }).then(r=>r.json())
                 if(!r.ok)throw new Error(r.error)

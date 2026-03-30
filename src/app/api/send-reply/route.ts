@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import nodemailer from 'nodemailer'
 import { ImapFlow } from 'imapflow'
+import { sendDiscordNotification } from '@/lib/discord'
 
 const BASE  = 'appnF2fNAyEYnscvo'
 const TABLE = 'tblMgthKziXfnIPBV'
@@ -23,7 +24,7 @@ async function appendToSent(user: string, pass: string, raw: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const { recordId, to, subject, body, inReplyToSubject } = await req.json()
+  const { recordId, to, subject, body, inReplyToSubject, company } = await req.json()
 
   const from = process.env.SMTP_EMAIL!
   const pass = process.env.SMTP_PASSWORD!
@@ -85,6 +86,13 @@ ${body.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^/,'<p>').repla
         }),
       })
     }
+
+    // Notify Discord that a reply was sent
+    sendDiscordNotification({
+      type:    'reply_sent',
+      company: company || to,
+      email:   to,
+    }).catch(() => {})
 
     return NextResponse.json({ ok: true, messageId: info.messageId })
   } catch (e: any) {
