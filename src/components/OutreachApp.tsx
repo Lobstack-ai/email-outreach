@@ -36,6 +36,7 @@ type Lead={
   githubStars:number; githubForks:number; githubWatchers:number;
   orgMembers:number; contributors:number; openIssues:number; repoCount:number;
   topRepos:string; leadScore:number; description:string;
+  lastContacted:string;
   // Sequence emails
   followUp1Subject:string; followUp1Body:string;
   followUp2Subject:string; followUp2Body:string;
@@ -72,6 +73,7 @@ function mapRecord(r:any):Lead{
     emailBody:    g('Email Body'),
     source:       g('Source'),
     topRepos:     g('Top Repos'),
+    lastContacted: g('Last Contacted'),
     // Numeric metrics
     githubStars:  n('GitHub Stars'),
     githubForks:  n('GitHub Forks'),
@@ -645,25 +647,62 @@ export default function App(){
     setValidating(false)
   }
 
+  // Warmup schedule: week → daily send limit + cooldown between emails
+  const WARMUP = [
+    {dailyMax:10, cooldownMs:90000},   // Week 1 — very gentle
+    {dailyMax:20, cooldownMs:75000},   // Week 2
+    {dailyMax:35, cooldownMs:60000},   // Week 3
+    {dailyMax:50, cooldownMs:45000},   // Week 4
+    {dailyMax:75, cooldownMs:30000},   // Week 5
+    {dailyMax:100,cooldownMs:20000},   // Week 6+ — fully warmed
+  ]
+  const getWarmup = () => {
+    const days = Math.floor((Date.now() - new Date('2026-03-28').getTime()) / 86400000)
+    const week = Math.max(1, Math.min(6, Math.ceil((days + 1) / 7)))
+    return { ...WARMUP[week-1], week }
+  }
+
   const runCampaign=async()=>{
-    // Run validation first if not done
     if(!validation){
       toast('Run validation first to check email quality','w')
       await validateLeads()
       return
     }
-    // Cross-reference with validation — only send to leads that passed
+    const w = getWarmup()
+    const today = new Date().toISOString().split('T')[0]
     const blockedIds = new Set((validation?.results||[]).filter((r:any)=>!r.willSend).map((r:any)=>r.id))
     const ready = leads.filter(l=>
       l.emailBody && l.emailSubject && l.contactEmail && l.status==='New' &&
-      !blockedIds.has(l.id) &&
-      (sel.size===0||sel.has(l.id))
+      !blockedIds.has(l.id) && (sel.size===0||sel.has(l.id))
     )
     if(!ready.length){toast('No sendable leads — all blocked by validation or missing emails','w');return}
+
+    // Warmup daily budget check
+    const sentToday = leads.filter(l=>l.status==='Email Sent'&&l.lastContacted===today).length
+    const budget = w.dailyMax - sentToday
+    if(budget<=0){
+      toast(`Daily limit reached (${w.dailyMax}/day · Week ${w.week}). Come back tomorrow.`,'w')
+      addLog(`⚠ Week ${w.week} warmup limit: ${w.dailyMax}/day. ${sentToday} sent today already.`,'w')
+      return
+    }
+
+    const batch    = ready.slice(0, budget)
+    const deferred = ready.length - batch.length
+    const sec      = w.cooldownMs/1000
+    const estMin   = Math.ceil((batch.length * sec)/60)
+
+    if(batch.length > 5 && !confirm(
+      `Send ${batch.length} emails now?\n` +
+      (deferred>0?`${deferred} leads deferred to tomorrow (Week ${w.week} limit: ${w.dailyMax}/day).\n`:``) +
+      `Cooldown: ${sec}s between sends (~${estMin} min total).\nContinue?`
+    )) return
+
     setSending(true);setSendPct(0)
-    addLog(`=== Campaign: ${ready.length} leads via ${provider} ===`,'i')
-    for(let i=0;i<ready.length;i++){
-      const lead=ready[i]
+    addLog(`=== Campaign: ${batch.length} leads · ${sec}s cooldown · Week ${w.week} (${w.dailyMax}/day) ===`,'i')
+    if(deferred>0) addLog(`  ⚠ ${deferred} leads deferred to tomorrow`,'w')
+
+    for(let i=0;i<batch.length;i++){
+      const lead=batch[i]
       addLog(`→ ${lead.company} (${lead.contactEmail})`,'i')
       try{
         let msgId=`sent-${Date.now()}`
@@ -675,18 +714,30 @@ export default function App(){
           msgId=r.messageId
         }
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'update',recordId:lead.id,fields:{"Status":'Email Sent',"Sequence Status":'Email 1 Sent',"Last Contacted":new Date().toISOString().split('T')[0],"Follow Up #":1}})})
+          body:JSON.stringify({action:'update',recordId:lead.id,fields:{
+            'Status':'Email Sent','Sequence Status':'Email 1 Sent',
+            'Last Contacted':today,'Follow Up #':1
+          }})})
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:'log',fields:{"Campaign ID":`CAM-${Date.now()}`,"Company":lead.company,"Contact Email":lead.contactEmail,"Subject":lead.emailSubject,"Sequence Step":'Cold Email #1',"Sent At":new Date().toISOString(),"Message ID":msgId,"Result":'Sent'}})})
+          body:JSON.stringify({action:'log',fields:{
+            'Campaign ID':`CAM-${Date.now()}`,'Company':lead.company,
+            'Contact Email':lead.contactEmail,'Subject':lead.emailSubject,
+            'Sequence Step':'Cold Email #1','Sent At':new Date().toISOString(),
+            'Message ID':msgId,'Result':'Sent'
+          }})})
         setLeads(p=>p.map(l=>l.id===lead.id?{...l,status:'Email Sent'}:l))
         addLog(`  ✓ Sent to ${lead.company}`,'o')
       }catch(e:any){addLog(`  ✗ ${lead.company}: ${e.message}`,'e')}
-      setSendPct(Math.round(((i+1)/ready.length)*100))
-      if(i<ready.length-1){addLog('  ⏳ 45s cooldown...','w');await new Promise(r=>setTimeout(r,45000))}
+      setSendPct(Math.round(((i+1)/batch.length)*100))
+      if(i<batch.length-1){
+        addLog(`  ⏳ ${sec}s cooldown (Week ${w.week} warmup)...`,'w')
+        await new Promise(r=>setTimeout(r,w.cooldownMs))
+      }
     }
     setSending(false)
-    toast(`Campaign complete — ${ready.length} emails sent`)
-    addLog('=== Campaign complete ===','o')
+    const deferNote = deferred>0?` · ${deferred} deferred`:''
+    toast(`Campaign complete — ${batch.length} sent${deferNote}`)
+    addLog(`=== Done: ${batch.length} sent${deferNote} · ${budget-batch.length} budget remaining today ===`,'o')
   }
 
   const stats={
@@ -1467,7 +1518,7 @@ export default function App(){
           {tab==='send'&&<>
             <div className="ph">
               <div className="ph-t">Send Campaign</div>
-              <div className="ph-s">Validate emails before sending · PrivateEmail SMTP · 45s cooldown · all sends logged to Airtable</div>
+              <div className="ph-s">Warmup-aware sending · auto-enforces daily limits · PrivateEmail SMTP · all sends logged to Airtable</div>
             </div>
 
             {/* STEP 1 — PROVIDER */}
@@ -1522,7 +1573,9 @@ export default function App(){
                   </div>
 
                   {/* Per-lead results */}
+                  {/* Scrollable validation list — max 400px so page doesn't grow unbounded */}
                   <div style={{border:'1px solid var(--b)',borderRadius:'var(--r)',overflow:'hidden'}}>
+                    {/* Sticky header */}
                     <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                       <thead>
                         <tr>
@@ -1531,27 +1584,38 @@ export default function App(){
                           ))}
                         </tr>
                       </thead>
-                      <tbody>
-                        {validation.results.map((r:any)=>(
-                          <tr key={r.id} style={{borderBottom:'1px solid var(--b)'}}>
-                            <td style={{padding:'9px 12px'}}><strong>{r.company}</strong></td>
-                            <td style={{padding:'9px 12px',fontFamily:'var(--mono)',fontSize:11,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.email||<span style={{color:'var(--ink4)',fontStyle:'italic'}}>—</span>}</td>
-                            <td style={{padding:'9px 12px'}}>
-                              <span style={{
-                                fontFamily:'var(--mono)',fontSize:9,fontWeight:600,textTransform:'uppercase',
-                                padding:'2px 8px',borderRadius:999,border:'1px solid',
-                                color:r.status==='ready'?'var(--green)':r.status==='role'?'var(--yellow)':r.status==='missing'?'var(--ink4)':'var(--red)',
-                                background:r.status==='ready'?'#16a34a10':r.status==='role'?'#d9770610':r.status==='missing'?'var(--s3)':'#E8414210',
-                                borderColor:r.status==='ready'?'#16a34a30':r.status==='role'?'#d9770630':r.status==='missing'?'var(--b2)':'#E8414230',
-                              }}>
-                                {r.status==='ready'?'✓ Ready':r.status==='role'?'⚠ Role':r.status==='personal'?'✗ Personal':r.status==='edu'?'✗ Edu':r.status==='missing'?'○ Missing':'✗ Invalid'}
-                              </span>
-                            </td>
-                            <td style={{padding:'9px 12px',fontSize:11,color:'var(--ink3)'}}>{r.willSend?<span style={{color:'var(--green)'}}>Will send</span>:<span style={{color:'var(--red)'}}>{r.reason}</span>}</td>
-                          </tr>
-                        ))}
-                      </tbody>
                     </table>
+                    {/* Scrollable body */}
+                    <div style={{maxHeight:380,overflowY:'auto'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                        <tbody>
+                          {validation.results.map((r:any)=>(
+                            <tr key={r.id} style={{borderBottom:'1px solid var(--b)',background:r.willSend?'transparent':'#E841420304'}}>
+                              <td style={{padding:'9px 12px',width:'22%'}}><strong style={{fontSize:12}}>{r.company}</strong></td>
+                              <td style={{padding:'9px 12px',fontFamily:'var(--mono)',fontSize:11,width:'30%',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.email||<span style={{color:'var(--ink4)',fontStyle:'italic'}}>—</span>}</td>
+                              <td style={{padding:'9px 12px',width:'18%'}}>
+                                <span style={{
+                                  fontFamily:'var(--mono)',fontSize:9,fontWeight:600,textTransform:'uppercase',
+                                  padding:'2px 8px',borderRadius:999,border:'1px solid',
+                                  color:r.status==='ready'?'var(--green)':r.status==='role'?'var(--yellow)':r.status==='missing'?'var(--ink4)':'var(--red)',
+                                  background:r.status==='ready'?'#16a34a10':r.status==='role'?'#d9770610':r.status==='missing'?'var(--s3)':'#E8414210',
+                                  borderColor:r.status==='ready'?'#16a34a30':r.status==='role'?'#d9770630':r.status==='missing'?'var(--b2)':'#E8414230',
+                                }}>
+                                  {r.status==='ready'?'✓ Ready':r.status==='role'?'⚠ Role':r.status==='personal'?'✗ Personal':r.status==='edu'?'✗ Edu':r.status==='missing'?'○ Missing':'✗ Invalid'}
+                                </span>
+                              </td>
+                              <td style={{padding:'9px 12px',fontSize:11,color:'var(--ink3)',width:'30%'}}>{r.willSend?<span style={{color:'var(--green)'}}>Will send</span>:<span style={{color:'var(--red)'}}>{r.reason}</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {validation.results.length>10&&(
+                      <div style={{padding:'8px 12px',background:'var(--s2)',borderTop:'1px solid var(--b)',fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',display:'flex',justifyContent:'space-between'}}>
+                        <span>{validation.results.filter((r:any)=>r.willSend).length} will send · {validation.results.filter((r:any)=>!r.willSend).length} blocked</span>
+                        <span>Scroll to see all {validation.results.length} leads ↑</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1572,6 +1636,49 @@ export default function App(){
                   <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{stats.sent} sent · {stats.replied} replied</span>
                 </div>
               </div>
+
+              {/* Warmup status banner */}
+              {(()=>{
+                const days = Math.floor((Date.now() - new Date('2026-03-28').getTime()) / 86400000)
+                const week = Math.max(1, Math.min(6, Math.ceil((days + 1) / 7)))
+                const limits = [{d:10,s:90},{d:20,s:75},{d:35,s:60},{d:50,s:45},{d:75,s:30},{d:100,s:20}]
+                const {d: dailyMax, s: cooldownSec} = limits[week-1]
+                const today = new Date().toISOString().split('T')[0]
+                const sentToday = leads.filter(l=>l.status==='Email Sent'&&l.lastContacted===today).length
+                const budget = Math.max(0, dailyMax - sentToday)
+                const pct = Math.min(100, Math.round((sentToday/dailyMax)*100))
+                return(
+                  <div style={{marginBottom:16,padding:'14px 16px',background:budget===0?'#E8414208':'var(--s2)',border:`1px solid ${budget===0?'#E8414230':'var(--b)'}`,borderRadius:'var(--r)',display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+                    <div style={{flexShrink:0}}>
+                      <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',marginBottom:4}}>
+                        Week {week} Warmup · {cooldownSec}s between sends
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:10}}>
+                        <div style={{width:120,height:5,background:'var(--b2)',borderRadius:3,overflow:'hidden'}}>
+                          <div style={{height:'100%',width:`${pct}%`,background:budget===0?'var(--red2)':'var(--green)',borderRadius:3,transition:'width .3s'}}/>
+                        </div>
+                        <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:budget===0?'var(--red)':budget<5?'var(--yellow)':'var(--green)'}}>
+                          {sentToday}/{dailyMax} today
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{flex:1,minWidth:200}}>
+                      {budget===0?(
+                        <span style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--red)'}}>⚠ Daily limit reached — come back tomorrow</span>
+                      ):(
+                        <span style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)'}}>
+                          <span style={{color:'var(--ink)',fontWeight:600}}>{budget} emails</span> remaining today
+                          {week<4&&<span style={{color:'var(--ink4)'}}> · limit increases to {limits[week]?.d||100}/day next week</span>}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textAlign:'right',flexShrink:0}}>
+                      {week===1&&'Gentle start'}{week===2&&'Building trust'}{week===3&&'Gaining momentum'}
+                      {week===4&&'Good standing'}{week>=5&&'Fully warmed ✓'}
+                    </div>
+                  </div>
+                )
+              })()}
 
               {!validation&&(
                 <div className="alert aw" style={{marginBottom:0}}>
