@@ -4,36 +4,126 @@ const BASE  = 'appnF2fNAyEYnscvo'
 const TABLE = 'tblMgthKziXfnIPBV'
 const AT    = () => process.env.AIRTABLE_API_KEY!
 
-// Regenerate all emails using updated system prompt
-// Processes leads in batches to avoid timeout
-export async function POST(req: NextRequest) {
-  const { recordIds, senderName = 'Brandon @ Lobstack', dryRun = false } = await req.json()
+// ── Inline Claude caller (avoids internal HTTP fetch which breaks on Vercel) ──
+const SYSTEM_PROMPT = `You are an expert B2B cold email copywriter. You write emails that get replies from technical founders, CTOs, and VPs Engineering.
 
-  // Load leads to regenerate
+HARD RULES — violating any of these is a failure:
+- NEVER use dashes or hyphens as connectors (no em dashes, no " — ", no " - " between clauses). Use periods or commas instead.
+- NEVER start a sentence with "I"
+- NEVER say: "Hope this finds you well", "I wanted to reach out", "touching base", "circling back", "following up", "just checking in", "wanted to see", "quick question", "synergy", "game-changer", "revolutionary", "streamline", "leverage", "utilize", "pain points"
+- NEVER use ALL CAPS anywhere
+- NEVER use more than one exclamation mark in the entire email
+- NEVER give the recipient two equal choices — one primary ask, one quiet secondary
+- NEVER write more than 6 sentences in a cold email body
+- NEVER write more than 3 sentences in a follow-up body
+- Keep sentences short. Under 20 words each.
+
+TONE: A peer technical founder writing to another technical founder. Warm, direct, specific. Not a salesperson.
+
+Respond ONLY with valid JSON. No markdown fences. No explanation.`
+
+async function callClaude(prompt: string, maxTokens = 600): Promise<any> {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'x-api-key':         process.env.ANTHROPIC_API_KEY!,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model:      'claude-sonnet-4-20250514',
+      max_tokens: maxTokens,
+      system:     SYSTEM_PROMPT,
+      messages:   [{ role: 'user', content: prompt }],
+    }),
+  })
+  const data  = await res.json()
+  const raw   = data.content?.[0]?.text || ''
+  const match = raw.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('No JSON in Claude response')
+  return JSON.parse(match[0])
+}
+
+function buildColdPrompt(lead: any, senderName: string): string {
+  return `Write a cold outreach email FROM Lobstack (lobstack.ai) TO a decision maker at ${lead.company}.
+
+ABOUT LOBSTACK: Subscription platform that deploys autonomous AI agents on isolated VMs with persistent memory and 100+ integrations in under 90 seconds. Zero DevOps. Built for teams shipping AI to production.
+
+ABOUT THE RECIPIENT:
+Company: ${lead.company} (${lead.companyType})
+What they build: ${lead.description || lead.notes || 'AI/ML tooling'}
+Top repos: ${lead.topRepos || lead.githubOrgUrl || 'N/A'}
+GitHub: ${lead.githubStars ? `${lead.githubStars.toLocaleString()} stars` : ''} ${lead.orgMembers ? `· ${lead.orgMembers} org members` : ''}
+Contact: ${lead.contactName ? `${lead.contactName}${lead.jobTitle ? ` (${lead.jobTitle})` : ''}` : 'decision maker'}
+
+EMAIL STRUCTURE:
+- Subject: 4-7 words, specific to their actual work, no question marks
+- Opening: one sharp observation about what they build, cite a real repo or product name
+- 2-3 sentences on the problem: production agent deployment crushes teams with VM setup, memory that resets, wiring integrations from scratch. Be specific to their stack.
+- 1 sentence on Lobstack
+- Primary CTA: "Worth a 15-minute call?" or a specific variation tied to their work
+- Optional quiet secondary: "Or poke around at lobstack.ai" only if natural
+- Sign off: ${senderName}
+
+Return JSON: {"subject":"...","body":"..."}`
+}
+
+function buildFU1Prompt(lead: any, coldSubject: string, senderName: string): string {
+  return `Write follow-up email #1 for Lobstack outreach to ${lead.company}. Sent 5 days after the cold email, no reply.
+
+Original subject: "${coldSubject}"
+Company: ${lead.company} — ${lead.description || lead.notes || 'AI tooling'}
+Top repos: ${lead.topRepos || 'N/A'}
+
+RULES:
+- 2 to 3 sentences MAX
+- No apology, no "just following up", no needy energy
+- New angle: show something specific tied to their stack, one concrete number, or a demo offer
+- End with a small specific ask: a day and time, or "5 minutes this week?"
+- Subject: Re: ${coldSubject}
+
+Return JSON: {"subject":"Re: ${coldSubject}","body":"..."}`
+}
+
+function buildFU2Prompt(lead: any, coldSubject: string, senderName: string): string {
+  return `Write the final breakup email for Lobstack outreach to ${lead.company}. Two emails sent, no reply.
+
+Original subject: "${coldSubject}"
+Company: ${lead.company} — ${lead.description || lead.notes || 'AI tooling'}
+
+RULES:
+- 2 sentences ONLY
+- Sentence 1: one final specific insight relevant to their work
+- Sentence 2: graceful exit. "No worries if the timing is off, I will leave it here." Zero pressure, zero guilt.
+- Subject: Re: ${coldSubject}
+
+Return JSON: {"subject":"Re: ${coldSubject}","body":"..."}`
+}
+
+// ── Main handler ──────────────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  const { recordIds, senderName = 'Brandon @ Lobstack' } = await req.json()
+
+  // Load leads from Airtable
   let leads: any[] = []
 
   if (recordIds?.length) {
-    // Specific records
     for (const id of recordIds) {
       const r = await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}/${id}`, {
         headers: { Authorization: `Bearer ${AT()}` },
       })
-      if (r.ok) {
-        const d = await r.json()
-        leads.push(d)
-      }
+      if (r.ok) leads.push(await r.json())
     }
   } else {
-    // All leads with email body (full regeneration)
+    // All leads that have an email body
     let offset: string | undefined
     do {
       const qs = offset ? `pageSize=100&offset=${offset}` : 'pageSize=100'
-      const r = await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}?${qs}`, {
+      const r  = await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}?${qs}`, {
         headers: { Authorization: `Bearer ${AT()}` },
       })
       const d = await r.json()
-      const withEmail = (d.records || []).filter((rec: any) => rec.fields['Email Body'])
-      leads.push(...withEmail)
+      leads.push(...(d.records || []).filter((rec: any) => rec.fields['Email Body']))
       offset = d.offset
     } while (offset)
   }
@@ -42,16 +132,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, processed: 0, message: 'No leads to regenerate' })
   }
 
-  // Process first batch of 10 (Vercel serverless timeout is ~25s)
-  // Client should call repeatedly until done = true
-  const batchSize = 8
-  const batch = leads.slice(0, batchSize)
+  // Process up to 8 leads per call (Vercel 25s timeout)
+  const batch   = leads.slice(0, 8)
   const results: { id: string; company: string; ok: boolean; error?: string }[] = []
 
   for (const record of batch) {
-    const f = record.fields
+    const f    = record.fields
     const lead = {
-      id:           record.id,
       company:      f['Company'] || '',
       companyType:  f['Company Type'] || 'AI/ML Startup',
       description:  f['Personalization Notes'] || '',
@@ -59,42 +146,34 @@ export async function POST(req: NextRequest) {
       topRepos:     f['Top Repos'] || '',
       aiTools:      f['AI Tools Used'] || '',
       githubStars:  f['GitHub Stars'] || 0,
-      githubForks:  f['GitHub Forks'] || 0,
       orgMembers:   f['Org Members'] || 0,
       website:      f['Website'] || '',
       githubOrgUrl: f['GitHub Org URL'] || '',
       contactName:  f['Contact Name'] || '',
       jobTitle:     f['Job Title'] || '',
-      contactEmail: f['Contact Email'] || '',
     }
 
     try {
-      if (dryRun) {
-        results.push({ id: record.id, company: lead.company, ok: true })
-        continue
-      }
+      // Generate cold email
+      const cold = await callClaude(buildColdPrompt(lead, senderName))
+      if (!cold.subject || !cold.body) throw new Error('Cold email generation failed')
 
-      // Call generate API
-      const genRes = await fetch(`${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lead, senderName, mode: 'all' }),
-      })
-      const gen = await genRes.json()
-      if (!gen.ok) throw new Error(gen.error)
+      // Generate follow-ups
+      const fu1 = await callClaude(buildFU1Prompt(lead, cold.subject, senderName), 400)
+      const fu2 = await callClaude(buildFU2Prompt(lead, cold.subject, senderName), 300)
 
       // Save to Airtable
       await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}/${record.id}`, {
-        method: 'PATCH',
+        method:  'PATCH',
         headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fields: {
-            'Email Subject':      gen.subject,
-            'Email Body':         gen.body,
-            'Follow-up 1 Subject': gen.followUp1Subject || '',
-            'Follow-up 1 Body':    gen.followUp1Body    || '',
-            'Follow-up 2 Subject': gen.followUp2Subject || '',
-            'Follow-up 2 Body':    gen.followUp2Body    || '',
+            'Email Subject':       cold.subject,
+            'Email Body':          cold.body,
+            'Follow-up 1 Subject': fu1.subject || `Re: ${cold.subject}`,
+            'Follow-up 1 Body':    fu1.body    || '',
+            'Follow-up 2 Subject': fu2.subject || `Re: ${cold.subject}`,
+            'Follow-up 2 Body':    fu2.body    || '',
           },
           typecast: true,
         }),
@@ -105,16 +184,15 @@ export async function POST(req: NextRequest) {
       results.push({ id: record.id, company: lead.company, ok: false, error: e.message })
     }
 
-    // Small delay to avoid rate limits
-    await new Promise(r => setTimeout(r, 500))
+    await new Promise(r => setTimeout(r, 400))
   }
 
   return NextResponse.json({
     ok:        true,
     processed: results.length,
     total:     leads.length,
-    done:      leads.length <= batchSize,
-    remaining: Math.max(0, leads.length - batchSize),
+    done:      leads.length <= 8,
+    remaining: Math.max(0, leads.length - 8),
     results,
   })
 }
