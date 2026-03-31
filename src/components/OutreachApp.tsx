@@ -42,6 +42,8 @@ type Lead={
   followUp2Subject:string; followUp2Body:string;
   // Reply fields
   replyText:string; replyIntent:string; suggestedReply:string; replySent:boolean;
+  // Tracking + ICP
+  openCount:number; lastOpened:string; bounced:boolean; disqualified:boolean;
 }
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
@@ -92,7 +94,11 @@ function mapRecord(r:any):Lead{
     replyText:     g('Reply Text'),
     replyIntent:   g('Reply Intent'),
     suggestedReply: g('Suggested Reply'),
-    replySent:     !!(f['Reply Sent']),
+    replySent:      !!(f['Reply Sent']),
+    openCount:      n('Open Count'),
+    lastOpened:     g('Last Opened'),
+    bounced:        !!(f['Bounced']),
+    disqualified:   !!(f['Disqualified']),
   }
 }
 
@@ -712,9 +718,12 @@ export default function App(){
         let msgId=`sent-${Date.now()}`
         if(provider==='privateemail'){
           const r=await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({to:lead.contactEmail,subject:lead.emailSubject,body:lead.emailBody})
+            body:JSON.stringify({to:lead.contactEmail,subject:lead.emailSubject,body:lead.emailBody,recordId:lead.id})
           }).then(r=>r.json())
-          if(!r.ok)throw new Error(r.error)
+          if(!r.ok){
+            if(r.bounced) setLeads(p=>p.map(l=>l.id===lead.id?{...l,bounced:true}:l))
+            throw new Error(r.error)
+          }
           msgId=r.messageId
         }
         await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -974,6 +983,71 @@ export default function App(){
               const fu2Due = leads.filter(l=>l.sequenceStatus==='Follow-up 1 Sent'&&!!l.followUp2Body).length
               return(
                 <>
+                  {/* TODAY'S QUEUE */}
+                  {(()=>{
+                    const today = new Date().toISOString().split('T')[0]
+                    const WARMUP_LIMITS = [10,20,35,50,75,100]
+                    const days = Math.floor((Date.now() - new Date('2026-03-28').getTime()) / 86400000)
+                    const week = Math.max(1, Math.min(6, Math.ceil((days+1)/7)))
+                    const dailyMax = WARMUP_LIMITS[week-1]
+                    const sentToday = leads.filter(l=>l.status==='Email Sent'&&l.lastContacted===today).length
+                    const budget = Math.max(0, dailyMax - sentToday)
+                    const readyToSend = leads.filter(l=>l.status==='New'&&l.emailBody&&l.contactEmail&&!l.bounced&&!l.disqualified).length
+                    const fu1Due = leads.filter(l=>{
+                      if(l.sequenceStatus!=='Email 1 Sent'||!l.followUp1Body) return false
+                      const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
+                      return d>=5
+                    }).length
+                    const fu2Due = leads.filter(l=>{
+                      if(l.sequenceStatus!=='Follow-up 1 Sent'||!l.followUp2Body) return false
+                      const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
+                      return d>=7
+                    }).length
+                    const needsEmail = leads.filter(l=>!l.emailBody&&l.contactEmail&&!l.disqualified).length
+                    const needsContact = leads.filter(l=>!l.contactEmail&&!l.disqualified).length
+                    const bounced = leads.filter(l=>l.bounced).length
+                    const disqualified = leads.filter(l=>l.disqualified).length
+
+                    return(
+                      <>
+                        <div className="stitle">Today's Queue</div>
+                        <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:24,boxShadow:'var(--sh)'}}>
+                          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)'}}>
+                            {[
+                              {lbl:'Send budget',val:budget,sub:`of ${dailyMax}/day · Week ${week}`,col:budget===0?'var(--red)':budget<5?'var(--yellow)':'var(--green)',act:()=>setTab('send')},
+                              {lbl:'Ready to send',val:readyToSend,sub:'passed validation',col:readyToSend>0?'var(--ink)':'var(--ink4)',act:()=>setTab('send')},
+                              {lbl:'FU1 due today',val:fu1Due,sub:'5+ days no reply',col:fu1Due>0?'var(--yellow)':'var(--ink4)',act:null},
+                              {lbl:'FU2 due today',val:fu2Due,sub:'7+ days no reply',col:fu2Due>0?'var(--orange,#d97706)':'var(--ink4)',act:null},
+                            ].map(({lbl,val,sub,col,act},i,arr)=>(
+                              <div key={lbl}
+                                onClick={act||undefined}
+                                style={{padding:'16px',borderRight:i<arr.length-1?'1px solid var(--b)':'none',textAlign:'center',cursor:act?'pointer':'default',transition:'background .1s'}}
+                                onMouseEnter={act?e=>(e.currentTarget.style.background='var(--s2)'):undefined}
+                                onMouseLeave={act?e=>(e.currentTarget.style.background=''):undefined}>
+                                <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:26,letterSpacing:'-1px',color:val>0?col:'var(--ink4)'}}>{val}</div>
+                                <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:4}}>{lbl}</div>
+                                <div style={{fontFamily:'var(--body)',fontSize:10,color:'var(--ink4)',marginTop:2}}>{sub}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{padding:'10px 16px',borderTop:'1px solid var(--b)',background:'var(--s2)',display:'flex',gap:20,flexWrap:'wrap'}}>
+                            {[
+                              {lbl:'Need email written',val:needsEmail,col:'var(--yellow)',act:()=>setTab('generate')},
+                              {lbl:'Need contact email',val:needsContact,col:'var(--ink3)',act:()=>setTab('crm')},
+                              {lbl:'Bounced',val:bounced,col:'var(--red)',act:()=>{setTab('crm');setCrmFilter('noemail')}},
+                              {lbl:'Disqualified',val:disqualified,col:'var(--ink4)',act:null},
+                            ].filter(m=>m.val>0).map(({lbl,val,col,act})=>(
+                              <span key={lbl} onClick={act||undefined} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',cursor:act?'pointer':'default',display:'flex',alignItems:'center',gap:4}}>
+                                <span style={{fontWeight:700,color:col}}>{val}</span> {lbl}
+                              </span>
+                            ))}
+                            {needsEmail===0&&needsContact===0&&bounced===0&&readyToSend===0&&fu1Due===0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)'}}>✓ All clear</span>}
+                          </div>
+                        </div>
+                      </>
+                    )
+                  })()}
+
                   <div className="stitle">Sequence Pipeline</div>
                   <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:28,boxShadow:'var(--sh)'}}>
                     <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)'}}>
@@ -1323,6 +1397,8 @@ export default function App(){
                   <option value="interested">Interested</option>
                   <option value="noemail">No email</option>
                   <option value="noseq">No sequence</option>
+                  <option value="bounced">Bounced</option>
+                  <option value="disqualified">Disqualified</option>
                 </select>
                 {(crmSearch||crmFilter!=='all')&&(
                   <button className="btn btn-ghost btn-xs" onClick={()=>{setCrmSearch('');setCrmFilter('all')}}>✕ Reset</button>
@@ -1331,6 +1407,10 @@ export default function App(){
                   <button className="btn btn-ghost btn-sm" onClick={()=>loadLeads()}>↻</button>
                   {sel.size>0&&<button className="btn btn-ghost btn-sm" onClick={()=>setSel(new Set())}>Clear {sel.size}</button>}
                   <button className="btn btn-ghost btn-sm" onClick={()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank')}>↗ Airtable</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>{
+                    const f=crmFilter!=='all'?`?filter=${crmFilter}`:''
+                    window.open(`/api/export${f}`,'_blank')
+                  }} title="Download current filtered view as CSV">↓ CSV</button>
                 </div>
               </div>
             </div>
@@ -1346,7 +1426,7 @@ export default function App(){
                   ||(crmFilter==='replied'&&l.status==='Replied')
                   ||(crmFilter==='interested'&&l.replyIntent==='interested')
                   ||(crmFilter==='noemail'&&!l.contactEmail)
-                  ||(crmFilter==='noseq'&&!l.emailBody)
+                  ||(crmFilter==='noseq'&&!l.emailBody)||(crmFilter==='bounced'&&l.bounced)||(crmFilter==='disqualified'&&l.disqualified)
                 return matchQ&&matchF
               })
               return(
@@ -1459,6 +1539,13 @@ export default function App(){
                         {detailLead.contactEmail
                           ?<div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--green)',marginBottom:4}}>✓ {detailLead.contactEmail}</div>
                           :<div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink4)',fontStyle:'italic',marginBottom:4}}>No email found</div>}
+                        {detailLead.openCount>0&&(
+                          <div style={{marginTop:6,display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)'}}>👁 Opened {detailLead.openCount}×</span>
+                            {detailLead.lastOpened&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{detailLead.lastOpened}</span>}
+                          </div>
+                        )}
+                        {detailLead.bounced&&<div style={{marginTop:4,fontFamily:'var(--mono)',fontSize:10,color:'var(--red)'}}>⚡ Email bounced — invalid address</div>}
                         {detailLead.website&&<a href={detailLead.website.startsWith('http')?detailLead.website:`https://${detailLead.website}`} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textDecoration:'none'}}>{detailLead.website.replace(/^https?:\/\//,'')}</a>}
                         {detailLead.githubOrgUrl&&<div style={{marginTop:4}}><a href={detailLead.githubOrgUrl} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)',textDecoration:'none'}}>github.com/{detailLead.githubOrgUrl.split('/').pop()}</a></div>}
                       </div>
@@ -1520,11 +1607,33 @@ export default function App(){
 
                       {/* Notes */}
                       {detailLead.notes&&!detailLead.notes.startsWith('[REPLY')&&(
-                        <div style={{padding:'14px 18px'}}>
+                        <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)'}}>
                           <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:6}}>Notes</div>
                           <div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{detailLead.notes.slice(0,240)}</div>
                         </div>
                       )}
+
+                      {/* Actions */}
+                      <div style={{padding:'12px 18px',display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {!detailLead.disqualified?(
+                          <button className="btn btn-ghost btn-sm" style={{flex:1,color:'var(--ink3)'}} onClick={async()=>{
+                            await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
+                              body:JSON.stringify({action:'update',recordId:detailLead.id,fields:{'Disqualified':true,'Status':'Not Interested','Sequence Status':'Opted Out'}})})
+                            setLeads(p=>p.map(l=>l.id===detailLead.id?{...l,disqualified:true,status:'Not Interested',sequenceStatus:'Opted Out'}:l))
+                            setDetailLead(null)
+                            toast(`${detailLead.company} disqualified`,'w')
+                          }}>✕ Disqualify</button>
+                        ):(
+                          <button className="btn btn-ghost btn-sm" style={{flex:1,color:'var(--green)'}} onClick={async()=>{
+                            await fetch('/api/airtable',{method:'POST',headers:{'Content-Type':'application/json'},
+                              body:JSON.stringify({action:'update',recordId:detailLead.id,fields:{'Disqualified':false,'Status':'New'}})})
+                            setLeads(p=>p.map(l=>l.id===detailLead.id?{...l,disqualified:false,status:'New'}:l))
+                            setDetailLead(d=>d?{...d,disqualified:false}:null)
+                            toast(`${detailLead.company} re-qualified`,'o')
+                          }}>↩ Re-qualify</button>
+                        )}
+                        <a href={`https://airtable.com/appnF2fNAyEYnscvo/tblMgthKziXfnIPBV/${detailLead.id}`} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>↗ Airtable</a>
+                      </div>
 
                     </div>
                   )}
