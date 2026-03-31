@@ -37,9 +37,16 @@ async function atLog(fields: Record<string, any>) {
 }
 
 // ── Email send ────────────────────────────────────────────────────────────────
-async function sendEmail(to: string, subject: string, body: string) {
-  const from = process.env.SMTP_EMAIL!
-  const pass = process.env.SMTP_PASSWORD!
+async function sendEmail(to: string, subject: string, body: string, recordId?: string) {
+  const from    = process.env.SMTP_EMAIL!
+  const pass    = process.env.SMTP_PASSWORD!
+  const appUrl  = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : 'https://email-outreach-rosy.vercel.app'
+  const pixel   = recordId
+    ? `<img src="${appUrl}/api/track/${recordId}" width="1" height="1" style="display:none" alt=""/>`
+    : ''
+
   const t = nodemailer.createTransport({
     host: 'mail.privateemail.com', port: 587, secure: false,
     auth: { user: from, pass },
@@ -49,13 +56,13 @@ async function sendEmail(to: string, subject: string, body: string) {
   await t.verify()
   const info = await t.sendMail({
     from:    `Brandon @ Lobstack <${from}>`,
-    replyTo: `Brandon @ Lobstack <${from}>`,  // replies come back to same inbox
+    replyTo: `Brandon @ Lobstack <${from}>`,
     to, subject,
     text: body + '\n\n---\nTo unsubscribe reply with "unsubscribe".',
     html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:600px">
       ${body.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^/,'<p>').replace(/$/,'</p>')}
       <p style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999">
-        To unsubscribe, reply with "unsubscribe".</p></div>`,
+        To unsubscribe, reply with "unsubscribe".</p>${pixel}</div>`,
     headers: { 'List-Unsubscribe': `<mailto:${from}?subject=unsubscribe>`, 'Precedence': 'bulk' },
   })
   t.close()
@@ -283,7 +290,7 @@ export async function GET(req: NextRequest) {
       if (seq === 'Email 1 Sent' && f['Follow-up 1 Body'] && f['Follow-up 1 Subject']) {
         if (daysSince(lastDate) >= FU1_DAYS) {
           try {
-            const msgId = await sendEmail(email, f['Follow-up 1 Subject'], f['Follow-up 1 Body'])
+            const msgId = await sendEmail(email, f['Follow-up 1 Subject'], f['Follow-up 1 Body'], record.id)
             await atPatch(record.id, {
               'Sequence Status': 'Follow-up 1 Sent',
               'Status':          'Email Sent',
@@ -316,7 +323,7 @@ export async function GET(req: NextRequest) {
       if (seq === 'Follow-up 1 Sent' && f['Follow-up 2 Body'] && f['Follow-up 2 Subject']) {
         if (daysSince(lastDate) >= FU2_DAYS) {
           try {
-            const msgId = await sendEmail(email, f['Follow-up 2 Subject'], f['Follow-up 2 Body'])
+            const msgId = await sendEmail(email, f['Follow-up 2 Subject'], f['Follow-up 2 Body'], record.id)
             await atPatch(record.id, {
               'Sequence Status': 'Follow-up 2 Sent',
               'Status':          'Email Sent',
