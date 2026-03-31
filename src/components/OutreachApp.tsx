@@ -374,6 +374,10 @@ export default function App(){
   const[sendPct,setSendPct]=useState(0)
   const[preview,setPreview]=useState<Lead|null>(null)
   const[provider,setProvider]=useState<'privateemail'|'gmail'>('privateemail')
+  // CRM search + filter + detail panel
+  const[crmSearch,setCrmSearch]=useState('')
+  const[crmFilter,setCrmFilter]=useState('all')
+  const[detailLead,setDetailLead]=useState<Lead|null>(null)
   // Inbox state
   const[inboxLead,setInboxLead]=useState<Lead|null>(null)
   const[replyDraft,setReplyDraft]=useState<Record<string,string>>({})
@@ -1298,80 +1302,237 @@ export default function App(){
           {tab==='crm'&&<>
             <div className="ph">
               <div className="ph-t">Lead CRM</div>
-              <div className="ph-s">Lobstack CRM · appnF2fNAyEYnscvo · {stats.total} leads · {stats.hasContact} contacts</div>
+              <div className="ph-s">{stats.total} leads · {stats.hasContact} contacts · {stats.sent} sent · {stats.replied} replied</div>
             </div>
-            <div className="card">
-              <div className="card-hd">
-                <div className="ct">Lobstack Leads</div>
-                <div className="btn-row">
-                  <button className="btn btn-ghost btn-sm" onClick={()=>loadLeads()}>↻ Refresh</button>
+
+            {/* SEARCH + FILTER BAR */}
+            <div className="card" style={{padding:'12px 16px',marginBottom:12}}>
+              <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                <div style={{flex:1,minWidth:180,position:'relative'}}>
+                  <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--ink4)',fontSize:13,pointerEvents:'none'}}>🔍</span>
+                  <input type="text" value={crmSearch} onChange={e=>setCrmSearch(e.target.value)}
+                    placeholder="Search company, email, notes..."
+                    style={{width:'100%',padding:'7px 10px 7px 32px',fontFamily:'var(--body)',fontSize:12,borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s2)',color:'var(--ink)',outline:'none',boxSizing:'border-box'}}/>
+                </div>
+                <select value={crmFilter} onChange={e=>setCrmFilter(e.target.value)}
+                  style={{fontFamily:'var(--mono)',fontSize:11,padding:'7px 12px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s2)',color:'var(--ink)',cursor:'pointer'}}>
+                  <option value="all">All leads</option>
+                  <option value="new">New (unsent)</option>
+                  <option value="sent">Email sent</option>
+                  <option value="replied">Replied</option>
+                  <option value="interested">Interested</option>
+                  <option value="noemail">No email</option>
+                  <option value="noseq">No sequence</option>
+                </select>
+                {(crmSearch||crmFilter!=='all')&&(
+                  <button className="btn btn-ghost btn-xs" onClick={()=>{setCrmSearch('');setCrmFilter('all')}}>✕ Reset</button>
+                )}
+                <div className="btn-row" style={{marginLeft:'auto'}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>loadLeads()}>↻</button>
                   {sel.size>0&&<button className="btn btn-ghost btn-sm" onClick={()=>setSel(new Set())}>Clear {sel.size}</button>}
-                  <button className="btn btn-ghost btn-sm" onClick={()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank')}>↗ Open Airtable</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank')}>↗ Airtable</button>
                 </div>
               </div>
-              {leads.length===0?(
-                <div className="empty">
-                  <div className="empty-ico">◈</div>
-                  <div className="empty-t">No leads yet</div>
-                  <div className="empty-s">Scrape GitHub orgs and save to Airtable.</div>
-                  <button className="btn btn-dark" onClick={()=>setTab('scrape')}>Go to Scraper</button>
-                </div>
-              ):(
-                <div className="tw" style={{overflow:'hidden'}}>
-                  {/* Sticky header — outside the scroll container */}
-                  <table style={{tableLayout:'fixed',width:'100%'}}>
-                    <colgroup>
-                      <col style={{width:32}}/><col style={{width:'22%'}}/><col style={{width:64}}/><col style={{width:'22%'}}/><col style={{width:110}}/><col style={{width:130}}/><col style={{width:80}}/><col style={{width:60}}/><col style={{width:80}}/>
-                    </colgroup>
-                    <thead><tr>
-                      <th style={{padding:'10px 12px'}}><input type="checkbox" className="ck" onChange={e=>setSel(e.target.checked?new Set(leads.map(l=>l.id)):new Set())}/></th>
-                      <th>Company</th><th>Score</th><th>Contact Email</th><th>Status</th><th>Sequence</th><th>Stars</th><th>Email</th><th></th>
-                    </tr></thead>
-                  </table>
-                  {/* Scrollable body */}
-                  <div style={{maxHeight:520,overflowY:'auto'}}>
-                  <table style={{tableLayout:'fixed',width:'100%'}}>
-                    <colgroup>
-                      <col style={{width:32}}/><col style={{width:'22%'}}/><col style={{width:64}}/><col style={{width:'22%'}}/><col style={{width:110}}/><col style={{width:130}}/><col style={{width:80}}/><col style={{width:60}}/><col style={{width:80}}/>
-                    </colgroup>
-                    <tbody>
-                      {leads.map(lead=>(
-                        <tr key={lead.id} className={sel.has(lead.id)?'sel':''}>
-                          <td><input type="checkbox" className="ck" checked={sel.has(lead.id)} onChange={e=>{const s=new Set(sel);e.target.checked?s.add(lead.id):s.delete(lead.id);setSel(s)}}/></td>
-                          <td><strong>{lead.company}</strong></td>
-                          <td>
-                            {lead.leadScore>0?(
-                              <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:4,background:lead.leadScore>=70?'#16a34a15':lead.leadScore>=40?'#d9770615':'var(--s3)',color:lead.leadScore>=70?'var(--green)':lead.leadScore>=40?'var(--yellow)':'var(--ink3)'}}>
-                                {lead.leadScore}
-                              </span>
-                            ):<span style={{color:'var(--ink4)',fontSize:11}}>—</span>}
-                          </td>
-                          <td>{lead.contactEmail?(
-                                <div style={{display:'flex',alignItems:'center',gap:5}}>
-                                  <span style={{fontFamily:'var(--mono)',fontSize:11}}>{lead.contactEmail}</span>
-                                  {lead.jobTitle?.includes('(verified)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--green)',background:'#16a34a10',padding:'1px 5px',borderRadius:3}}>GitHub public</span>}
-                                  {lead.jobTitle?.includes('(inferred)')&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--yellow)',background:'#d9770610',padding:'1px 5px',borderRadius:3}}>pattern guess</span>}
-                                </div>
-                              ):<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>Add in Airtable →</span>}</td>
-                          <td><span className={`pill ${lead.status==='Email Sent'?'ps':lead.status==='Replied'?'pr':lead.status==='Booked Call'?'pb2':'pn'}`}>{lead.status||'New'}</span></td>
-                          <td>
-                            <span style={{fontFamily:'var(--mono)',fontSize:10,color:lead.sequenceStatus==='Replied'?'var(--green)':lead.sequenceStatus==='Booked'?'var(--green)':lead.sequenceStatus==='Cold'?'var(--ink4)':'var(--ink3)'}}>
-                              {lead.sequenceStatus||'Cold'}
-                              {lead.followUp1Body&&!lead.followUp1Subject.includes('Re:')===false&&<span style={{color:'var(--ink4)',marginLeft:4}}>→FU1</span>}
-                            </span>
-                          </td>
-                          <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.githubStars>0?`⭐${lead.githubStars.toLocaleString()}`:'—'}</span></td>
-                          <td>{lead.emailBody?<span style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:10}}>✓{lead.followUp1Body?' +seq':''}</span>:<span style={{color:'var(--ink4)',fontSize:10}}>—</span>}</td>
-                          <td>{lead.emailBody&&<button className="btn btn-ghost btn-xs" onClick={()=>setPreview(lead)}>Preview</button>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  </div>{/* end scrollable body */}
-                </div>
-              )}
             </div>
-            {preview&&(
+
+            {/* MAIN GRID: table + side panel */}
+            {(()=>{
+              const filtered=leads.filter(l=>{
+                const q=crmSearch.toLowerCase()
+                const matchQ=!q||(l.company.toLowerCase().includes(q)||l.contactEmail.toLowerCase().includes(q)||l.notes.toLowerCase().includes(q)||l.contactName.toLowerCase().includes(q))
+                const matchF=crmFilter==='all'
+                  ||(crmFilter==='new'&&l.status==='New')
+                  ||(crmFilter==='sent'&&l.status==='Email Sent')
+                  ||(crmFilter==='replied'&&l.status==='Replied')
+                  ||(crmFilter==='interested'&&l.replyIntent==='interested')
+                  ||(crmFilter==='noemail'&&!l.contactEmail)
+                  ||(crmFilter==='noseq'&&!l.emailBody)
+                return matchQ&&matchF
+              })
+              return(
+                <div style={{display:'grid',gridTemplateColumns:detailLead?'1fr 360px':'1fr',gap:12,alignItems:'start'}}>
+
+                  {/* LEFT — TABLE */}
+                  <div className="card" style={{overflow:'hidden'}}>
+                    {leads.length===0?(
+                      <div className="empty">
+                        <div className="empty-ico">◈</div>
+                        <div className="empty-t">No leads yet</div>
+                        <div className="empty-s">Scrape GitHub orgs and save to Airtable.</div>
+                        <button className="btn btn-dark" onClick={()=>setTab('scrape')}>Go to Scraper</button>
+                      </div>
+                    ):(
+                      <>
+                        {/* Sticky header */}
+                        <table style={{width:'100%',borderCollapse:'collapse',tableLayout:'fixed'}}>
+                          <colgroup>
+                            <col style={{width:32}}/><col style={{width:'21%'}}/><col style={{width:58}}/><col style={{width:'21%'}}/><col style={{width:100}}/><col style={{width:120}}/><col style={{width:72}}/><col style={{width:56}}/><col style={{width:72}}/>
+                          </colgroup>
+                          <thead><tr>
+                            <th style={{padding:'9px 12px'}}><input type="checkbox" className="ck" onChange={e=>setSel(e.target.checked?new Set(filtered.map(l=>l.id)):new Set())}/></th>
+                            <th>Company</th><th>Score</th><th>Contact Email</th><th>Status</th><th>Sequence</th><th>Stars</th><th>Email</th><th></th>
+                          </tr></thead>
+                        </table>
+                        {/* Scrollable body */}
+                        <div style={{maxHeight:520,overflowY:'auto'}}>
+                          <table style={{width:'100%',borderCollapse:'collapse',tableLayout:'fixed'}}>
+                            <colgroup>
+                              <col style={{width:32}}/><col style={{width:'21%'}}/><col style={{width:58}}/><col style={{width:'21%'}}/><col style={{width:100}}/><col style={{width:120}}/><col style={{width:72}}/><col style={{width:56}}/><col style={{width:72}}/>
+                            </colgroup>
+                            <tbody>
+                              {filtered.map(lead=>(
+                                <tr key={lead.id}
+                                  className={sel.has(lead.id)?'sel':''}
+                                  onClick={()=>setDetailLead(detailLead?.id===lead.id?null:lead)}
+                                  style={{cursor:'pointer',background:detailLead?.id===lead.id?'#E8414208':''}}>
+                                  <td style={{padding:'9px 12px'}} onClick={e=>e.stopPropagation()}>
+                                    <input type="checkbox" className="ck" checked={sel.has(lead.id)} onChange={e=>{const s=new Set(sel);e.target.checked?s.add(lead.id):s.delete(lead.id);setSel(s)}}/>
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}><strong style={{fontSize:12}}>{lead.company}</strong></td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    {lead.leadScore>0
+                                      ?<span style={{fontFamily:'var(--mono)',fontSize:10,fontWeight:600,padding:'2px 7px',borderRadius:4,background:lead.leadScore>=70?'#16a34a15':lead.leadScore>=40?'#d9770615':'var(--s3)',color:lead.leadScore>=70?'var(--green)':lead.leadScore>=40?'var(--yellow)':'var(--ink3)'}}>{lead.leadScore}</span>
+                                      :<span style={{color:'var(--ink4)',fontSize:11}}>—</span>}
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    {lead.contactEmail?(
+                                      <div style={{display:'flex',alignItems:'center',gap:4}}>
+                                        <span style={{fontFamily:'var(--mono)',fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{lead.contactEmail}</span>
+                                        {lead.jobTitle?.includes('(verified)')&&<span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--green)',background:'#16a34a10',padding:'1px 4px',borderRadius:3,flexShrink:0}}>✓</span>}
+                                        {lead.jobTitle?.includes('(inferred)')&&<span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--yellow)',background:'#d9770610',padding:'1px 4px',borderRadius:3,flexShrink:0}}>~</span>}
+                                      </div>
+                                    ):<span style={{color:'var(--ink4)',fontStyle:'italic',fontSize:11}}>—</span>}
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    <span className={`pill ${lead.status==='Email Sent'?'ps':lead.status==='Replied'?'pr':lead.status==='Booked Call'?'pb2':'pn'}`}>{lead.status||'New'}</span>
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:lead.sequenceStatus==='Replied'||lead.sequenceStatus==='Booked'?'var(--green)':lead.sequenceStatus==='Cold'||!lead.sequenceStatus?'var(--ink4)':'var(--ink3)'}}>
+                                      {lead.sequenceStatus||'—'}
+                                    </span>
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{lead.githubStars>0?`⭐${lead.githubStars.toLocaleString()}`:'—'}</span>
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    {lead.emailBody?<span style={{color:'var(--green)',fontFamily:'var(--mono)',fontSize:10}}>✓{lead.followUp1Body?' +seq':''}</span>:<span style={{color:'var(--ink4)',fontSize:10}}>—</span>}
+                                  </td>
+                                  <td style={{padding:'9px 12px'}}>
+                                    {lead.emailBody&&<button className="btn btn-ghost btn-xs" onClick={e=>{e.stopPropagation();setPreview(lead)}}>↗</button>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {filtered.length>0&&(
+                          <div style={{padding:'8px 14px',background:'var(--s2)',borderTop:'1px solid var(--b)',display:'flex',justifyContent:'space-between',fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                            <span>{filtered.length} leads{filtered.length!==leads.length?` (filtered from ${leads.length})`:''}</span>
+                            {detailLead?<span>← click row to close panel</span>:<span>click row to inspect →</span>}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* RIGHT — DETAIL PANEL */}
+                  {detailLead&&(
+                    <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',boxShadow:'var(--sh)',position:'sticky',top:72,maxHeight:'calc(100vh - 90px)',overflowY:'auto'}}>
+                      {/* Header */}
+                      <div style={{padding:'16px 18px',borderBottom:'1px solid var(--b)',display:'flex',alignItems:'flex-start',justifyContent:'space-between',background:'var(--s1)',position:'sticky',top:0,zIndex:2}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:15,letterSpacing:'-.3px',marginBottom:5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{detailLead.company}</div>
+                          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                            {detailLead.leadScore>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 7px',borderRadius:10,background:detailLead.leadScore>=70?'#16a34a18':'#d9770618',color:detailLead.leadScore>=70?'var(--green)':'var(--yellow)',fontWeight:700}}>Score {detailLead.leadScore}</span>}
+                            <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{detailLead.companyType}</span>
+                            {detailLead.sequenceStatus&&detailLead.sequenceStatus!=='Cold'&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:detailLead.sequenceStatus==='Replied'?'var(--green)':'var(--ink3)'}}>{detailLead.sequenceStatus}</span>}
+                          </div>
+                        </div>
+                        <button className="btn btn-ghost btn-xs" style={{flexShrink:0,marginLeft:8}} onClick={()=>setDetailLead(null)}>✕</button>
+                      </div>
+
+                      {/* Contact */}
+                      <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)'}}>
+                        <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>Contact</div>
+                        {detailLead.contactName&&<div style={{fontSize:13,fontWeight:700,marginBottom:3}}>{detailLead.contactName}</div>}
+                        {detailLead.jobTitle&&<div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',marginBottom:5}}>{detailLead.jobTitle.replace(' (verified)','').replace(' (inferred)','')}</div>}
+                        {detailLead.contactEmail
+                          ?<div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--green)',marginBottom:4}}>✓ {detailLead.contactEmail}</div>
+                          :<div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink4)',fontStyle:'italic',marginBottom:4}}>No email found</div>}
+                        {detailLead.website&&<a href={detailLead.website.startsWith('http')?detailLead.website:`https://${detailLead.website}`} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textDecoration:'none'}}>{detailLead.website.replace(/^https?:\/\//,'')}</a>}
+                        {detailLead.githubOrgUrl&&<div style={{marginTop:4}}><a href={detailLead.githubOrgUrl} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)',textDecoration:'none'}}>github.com/{detailLead.githubOrgUrl.split('/').pop()}</a></div>}
+                      </div>
+
+                      {/* GitHub metrics */}
+                      {(detailLead.githubStars>0||detailLead.orgMembers>0)&&(
+                        <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:8}}>GitHub</div>
+                          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                            {[
+                              {l:'Stars',    v:detailLead.githubStars,     fmt:(n:number)=>n.toLocaleString()},
+                              {l:'Forks',    v:detailLead.githubForks,     fmt:(n:number)=>n.toLocaleString()},
+                              {l:'Members',  v:detailLead.orgMembers,      fmt:(n:number)=>n.toLocaleString()},
+                              {l:'Contrib',  v:detailLead.contributors,    fmt:(n:number)=>n.toLocaleString()},
+                              {l:'Watchers', v:detailLead.githubWatchers,  fmt:(n:number)=>n.toLocaleString()},
+                              {l:'Repos',    v:detailLead.repoCount,       fmt:(n:number)=>n.toLocaleString()},
+                            ].filter(m=>m.v>0).map(m=>(
+                              <div key={m.l} style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'7px 10px'}}>
+                                <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginBottom:1}}>{m.l}</div>
+                                <div style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700}}>{m.fmt(m.v)}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {detailLead.topRepos&&<div style={{marginTop:8,fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',lineHeight:1.5}}>{detailLead.topRepos}</div>}
+                        </div>
+                      )}
+
+                      {/* Email sequence */}
+                      {(detailLead.emailBody||detailLead.followUp1Body)&&(
+                        <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:10}}>Sequence</div>
+                          {[
+                            {tag:'Day 1',subj:detailLead.emailSubject,body:detailLead.emailBody,c:'#2563eb'},
+                            {tag:'Day 5',subj:detailLead.followUp1Subject,body:detailLead.followUp1Body,c:'#d97706'},
+                            {tag:'Day 12',subj:detailLead.followUp2Subject,body:detailLead.followUp2Body,c:'#E84142'},
+                          ].filter(e=>e.body).map(e=>(
+                            <div key={e.tag} style={{marginBottom:8,background:'var(--s2)',borderRadius:'var(--r)',padding:'9px 11px',borderLeft:`3px solid ${e.c}`}}>
+                              <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginBottom:3}}>{e.tag}</div>
+                              <div style={{fontFamily:'var(--mono)',fontSize:10,fontWeight:600,marginBottom:4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.subj}</div>
+                              <div style={{fontSize:10,color:'var(--ink3)',lineHeight:1.5,maxHeight:54,overflow:'hidden'}}>{e.body?.slice(0,160)}{e.body&&e.body.length>160?'…':''}</div>
+                            </div>
+                          ))}
+                          <button className="btn btn-ghost btn-xs" style={{width:'100%',marginTop:2}} onClick={()=>{setPreview(detailLead);setDetailLead(null)}}>View full sequence →</button>
+                        </div>
+                      )}
+
+                      {/* Reply */}
+                      {detailLead.replyText&&(
+                        <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
+                            <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px'}}>Their Reply</span>
+                            {detailLead.replyIntent&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 7px',borderRadius:10,background:detailLead.replyIntent==='interested'?'#16a34a18':'var(--s3)',color:detailLead.replyIntent==='interested'?'var(--green)':'var(--ink3)'}}>{detailLead.replyIntent}</span>}
+                          </div>
+                          <div style={{fontSize:11,color:'var(--ink)',lineHeight:1.6,maxHeight:90,overflow:'hidden'}}>{detailLead.replyText.slice(0,280)}{detailLead.replyText.length>280?'…':''}</div>
+                          {!detailLead.replySent&&<button className="btn btn-red btn-xs" style={{width:'100%',marginTop:8}} onClick={()=>{setTab('inbox');setInboxLead(detailLead)}}>Reply in Inbox →</button>}
+                          {detailLead.replySent&&<div style={{marginTop:6,fontFamily:'var(--mono)',fontSize:9,color:'var(--green)',textAlign:'center'}}>✓ Reply sent</div>}
+                        </div>
+                      )}
+
+                      {/* Notes */}
+                      {detailLead.notes&&!detailLead.notes.startsWith('[REPLY')&&(
+                        <div style={{padding:'14px 18px'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:6}}>Notes</div>
+                          <div style={{fontSize:11,color:'var(--ink3)',lineHeight:1.5,maxHeight:80,overflow:'hidden'}}>{detailLead.notes.slice(0,240)}</div>
+                        </div>
+                      )}
+
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+          {preview&&(
               <div className="card">
                 <div className="card-hd">
                   <div className="ct">{preview.company} — Full Sequence</div>
@@ -1418,6 +1579,7 @@ export default function App(){
             </div>
           </>}
 
+          
           {/* ══ GENERATE ══ */}
           {tab==='generate'&&<>
             <div className="ph">
