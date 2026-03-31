@@ -821,6 +821,7 @@ export default function App(){
             {id:'generate',label:'Generate',num:stats.hasEmail||null},
             {id:'send',label:'Send',num:readyCnt||null,warn:readyCnt===0&&stats.hasEmail>0&&stats.hasContact>0},
             {id:'inbox',label:'Inbox',num:stats.replied||null,warn:false},
+            {id:'analytics',label:'Analytics',num:null,warn:false},
           ].map(({id,label,num,warn})=>(
             <button key={id} className={`nb ${tab===id?'active':''}`} onClick={()=>setTab(id)}>
               {label}
@@ -2211,8 +2212,293 @@ export default function App(){
             )
           })()}
 
+
+          {/* ══ ANALYTICS ══ */}
+          {tab==='analytics'&&(()=>{
+            const total      = leads.length
+            const withEmail  = leads.filter(l=>l.contactEmail).length
+            const withSeq    = leads.filter(l=>l.emailBody).length
+            const sent       = leads.filter(l=>l.status==='Email Sent').length
+            const replied    = leads.filter(l=>l.status==='Replied').length
+            const booked     = leads.filter(l=>l.status==='Booked Call').length
+            const opened     = leads.filter(l=>l.openCount>0).length
+            const bounced    = leads.filter(l=>l.bounced).length
+            const disq       = leads.filter(l=>l.disqualified).length
+
+            // Send activity by date
+            const byDate: Record<string,number> = {}
+            leads.forEach(l=>{if(l.lastContacted&&l.status==='Email Sent')byDate[l.lastContacted]=(byDate[l.lastContacted]||0)+1})
+            const dateKeys = Object.keys(byDate).sort()
+            const maxDay   = Math.max(...dateKeys.map(d=>byDate[d]),1)
+
+            // Score buckets
+            const sBuckets=[
+              {lbl:'81–100',n:leads.filter(l=>l.leadScore>80).length,          c:'#E84142'},
+              {lbl:'61–80', n:leads.filter(l=>l.leadScore>60&&l.leadScore<=80).length,c:'#16a34a'},
+              {lbl:'41–60', n:leads.filter(l=>l.leadScore>40&&l.leadScore<=60).length,c:'#d97706'},
+              {lbl:'21–40', n:leads.filter(l=>l.leadScore>20&&l.leadScore<=40).length,c:'#2563eb'},
+              {lbl:'0–20',  n:leads.filter(l=>l.leadScore<=20).length,          c:'#6b7280'},
+            ]
+            const maxB = Math.max(...sBuckets.map(b=>b.n),1)
+
+            // Company types
+            const tm: Record<string,number>={}
+            leads.forEach(l=>{const t=l.companyType||'Unknown';tm[t]=(tm[t]||0)+1})
+            const types=Object.entries(tm).sort((a,b)=>b[1]-a[1])
+            const tColors=['#E84142','#2563eb','#16a34a','#d97706','#6b7280','#7c3aed']
+            const circ=2*Math.PI*52
+
+            // Funnel
+            const funnel=[
+              {lbl:'Total leads',    v:total,     c:'#6b7280'},
+              {lbl:'Has email',      v:withEmail, c:'#2563eb'},
+              {lbl:'Has sequence',   v:withSeq,   c:'#7c3aed'},
+              {lbl:'Sent',           v:sent,      c:'#d97706'},
+              {lbl:'Opened',         v:opened,    c:'#0891b2'},
+              {lbl:'Replied',        v:replied,   c:'#16a34a'},
+              {lbl:'Booked',         v:booked,    c:'#E84142'},
+            ]
+
+            // Conversion rates
+            const conv=[
+              {lbl:'Lead → Contact', n:withEmail, d:total,     pct:total     ?Math.round(withEmail/total*100):0,    tgt:80},
+              {lbl:'Contact → Sent', n:sent,      d:withEmail, pct:withEmail ?Math.round(sent/withEmail*100):0,     tgt:100},
+              {lbl:'Sent → Opened',  n:opened,    d:sent,      pct:sent      ?Math.round(opened/sent*100):0,        tgt:30},
+              {lbl:'Sent → Replied', n:replied,   d:sent,      pct:sent      ?Math.round(replied/sent*100):0,       tgt:5},
+              {lbl:'Reply → Booked', n:booked,    d:replied,   pct:replied   ?Math.round(booked/replied*100):0,     tgt:30},
+            ]
+
+            const pBar=(pct:number,col:string,h=6)=>(
+              <div style={{height:h,background:'var(--b2)',borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',width:`${pct}%`,background:col,borderRadius:3,transition:'width .5s ease'}}/>
+              </div>
+            )
+
+            const avgScore = leads.length>0?Math.round(leads.reduce((s,l)=>s+(l.leadScore||0),0)/leads.length):0
+
+            return(
+              <>
+                <div className="ph">
+                  <div className="ph-t">Analytics</div>
+                  <div className="ph-s">Live from {total} leads in CRM · refreshes on load</div>
+                </div>
+
+                {/* ── STAT ROW ── */}
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:16}}>
+                  {[
+                    {lbl:'Total Leads',    v:total,    c:'var(--ink)'},
+                    {lbl:'Emails Sent',    v:sent,     c:'#E84142'},
+                    {lbl:'Replies',        v:replied,  c:'#16a34a'},
+                    {lbl:'Avg Lead Score', v:avgScore, c:'#d97706'},
+                  ].map(s=>(
+                    <div key={s.lbl} className="card" style={{textAlign:'center',padding:'18px 12px'}}>
+                      <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:32,letterSpacing:'-2px',color:s.c,lineHeight:1}}>{s.v}</div>
+                      <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:6}}>{s.lbl}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── ROW 1: Funnel + Conversions ── */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+
+                  {/* FUNNEL */}
+                  <div className="card">
+                    <div className="card-hd"><div className="ct">Outreach Funnel</div></div>
+                    <div style={{paddingTop:4}}>
+                      {funnel.map(s=>{
+                        const pct=total>0?Math.round(s.v/total*100):0
+                        return(
+                          <div key={s.lbl} style={{marginBottom:12}}>
+                            <div style={{display:'flex',justifyContent:'space-between',marginBottom:5,alignItems:'center'}}>
+                              <div style={{display:'flex',alignItems:'center',gap:7}}>
+                                <div style={{width:7,height:7,borderRadius:'50%',background:s.c,flexShrink:0}}/>
+                                <span style={{fontFamily:'var(--mono)',fontSize:11}}>{s.lbl}</span>
+                              </div>
+                              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{pct}%</span>
+                                <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:28,textAlign:'right'}}>{s.v}</span>
+                              </div>
+                            </div>
+                            {pBar(pct,s.c,14)}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {/* CONVERSION RATES */}
+                  <div className="card">
+                    <div className="card-hd"><div className="ct">Conversion Rates</div></div>
+                    <div style={{paddingTop:4}}>
+                      {conv.map(r=>{
+                        const col=r.pct>=r.tgt?'#16a34a':r.pct>=r.tgt*0.5?'#d97706':'#E84142'
+                        const pctOfTarget=Math.min(100,r.tgt>0?Math.round(r.pct/r.tgt*100):0)
+                        return(
+                          <div key={r.lbl} style={{marginBottom:14}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:5}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{r.lbl}</span>
+                              <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{r.n}/{r.d}</span>
+                                <span style={{fontFamily:'var(--sans)',fontSize:20,fontWeight:800,letterSpacing:'-1px',color:col,lineHeight:1}}>{r.pct}{'%'}</span>
+                              </div>
+                            </div>
+                            {pBar(pctOfTarget,col,6)}
+                            <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:2}}>target {r.tgt}{'%'}</div>
+                          </div>
+                        )
+                      })}
+                      <div style={{marginTop:12,padding:'10px 12px',background:'var(--s2)',borderRadius:'var(--r)',border:'1px solid var(--b)',fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',lineHeight:1.5}}>
+                        Cold email benchmark: 2–5% good · 5–10% great · 10%+ exceptional
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── ROW 2: Send activity + Score dist ── */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+
+                  {/* SEND ACTIVITY BAR CHART */}
+                  <div className="card">
+                    <div className="card-hd">
+                      <div className="ct">Send Activity</div>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{sent} total · {dateKeys.length} days</span>
+                    </div>
+                    {dateKeys.length===0?(
+                      <div style={{padding:'32px',textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:'var(--ink4)'}}>No sends yet</div>
+                    ):(
+                      <div style={{paddingTop:4}}>
+                        <div style={{display:'flex',alignItems:'flex-end',gap:8,height:140,paddingBottom:24,borderBottom:'1px solid var(--b)',position:'relative'}}>
+                          {[0.25,0.5,0.75,1].map(p=>(
+                            <div key={p} style={{position:'absolute',left:0,right:0,bottom:24+116*p,borderTop:'1px dashed var(--b)',opacity:.5}}/>
+                          ))}
+                          {dateKeys.map(date=>{
+                            const val=byDate[date]
+                            const h=Math.max(4,Math.round((val/maxDay)*116))
+                            const d=new Date(date+'T12:00:00')
+                            const lbl=`${d.getMonth()+1}/${d.getDate()}`
+                            return(
+                              <div key={date} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',height:'100%',justifyContent:'flex-end',position:'relative',zIndex:1}}>
+                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',marginBottom:3}}>{val}</span>
+                                <div style={{width:'100%',height:h,background:'#E84142cc',borderRadius:'3px 3px 0 0',borderTop:'2px solid #E84142'}}/>
+                                <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:4,position:'absolute',bottom:0}}>{lbl}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <div style={{marginTop:10,display:'flex',gap:16,fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexWrap:'wrap'}}>
+                          <span>Peak: {Math.max(...dateKeys.map(d=>byDate[d]))}/day</span>
+                          <span>Avg: {Math.round(sent/Math.max(dateKeys.length,1))}/day</span>
+                          <span>Remaining: {leads.filter(l=>l.status==='New'&&l.emailBody&&l.contactEmail).length} queued</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* LEAD SCORE DISTRIBUTION */}
+                  <div className="card">
+                    <div className="card-hd">
+                      <div className="ct">Lead Score Distribution</div>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>avg {avgScore} · {leads.filter(l=>l.leadScore>60).length} high-fit</span>
+                    </div>
+                    <div style={{paddingTop:4}}>
+                      {sBuckets.map(b=>(
+                        <div key={b.lbl} style={{marginBottom:12}}>
+                          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'center'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:7}}>
+                              <div style={{width:7,height:7,borderRadius:2,background:b.c}}/>
+                              <span style={{fontFamily:'var(--mono)',fontSize:11}}>{b.lbl}</span>
+                            </div>
+                            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{total>0?Math.round(b.n/total*100):0}{'%'}</span>
+                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:26,textAlign:'right'}}>{b.n}</span>
+                            </div>
+                          </div>
+                          {pBar(maxB>0?Math.round(b.n/maxB*100):0,b.c,12)}
+                        </div>
+                      ))}
+                      <div style={{marginTop:12,padding:'10px 12px',background:'var(--s2)',borderRadius:'var(--r)',border:'1px solid var(--b)',fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
+                        High-fit (61+): {leads.filter(l=>l.leadScore>60&&l.contactEmail).length} sendable · prioritize these for personalised follow-up
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── ROW 3: Company types + Pipeline health ── */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+
+                  {/* COMPANY TYPE DONUT */}
+                  <div className="card">
+                    <div className="card-hd"><div className="ct">Company Types</div></div>
+                    <div style={{display:'flex',gap:20,alignItems:'center',paddingTop:4}}>
+                      <svg width={140} height={140} style={{flexShrink:0}}>
+                        <circle cx={70} cy={70} r={52} fill="none" stroke="var(--b2)" strokeWidth={18}/>
+                        {(()=>{
+                          let offset=0
+                          return types.map(([lbl,cnt],i)=>{
+                            const pct=cnt/Math.max(total,1)
+                            const dash=circ*pct
+                            const gap=circ*(1-pct)
+                            const rot=offset*360
+                            offset+=pct
+                            return(
+                              <circle key={lbl} cx={70} cy={70} r={52} fill="none"
+                                stroke={tColors[i%tColors.length]} strokeWidth={18}
+                                strokeDasharray={`${dash} ${gap}`}
+                                strokeDashoffset={-(rot/360)*circ+(circ/4)}/>
+                            )
+                          })
+                        })()}
+                        <text x={70} y={66} textAnchor="middle" fill="var(--ink)" fontSize={22} fontWeight={800} fontFamily="var(--sans)">{total}</text>
+                        <text x={70} y={80} textAnchor="middle" fill="var(--ink4)" fontSize={9} fontFamily="var(--mono)">LEADS</text>
+                      </svg>
+                      <div style={{flex:1}}>
+                        {types.map(([lbl,cnt],i)=>(
+                          <div key={lbl} style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:9}}>
+                            <div style={{display:'flex',alignItems:'center',gap:7}}>
+                              <div style={{width:8,height:8,borderRadius:2,background:tColors[i%tColors.length],flexShrink:0}}/>
+                              <span style={{fontFamily:'var(--body)',fontSize:11}}>{lbl}</span>
+                            </div>
+                            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{Math.round(cnt/Math.max(total,1)*100)}{'%'}</span>
+                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:24,textAlign:'right'}}>{cnt}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PIPELINE HEALTH */}
+                  <div className="card">
+                    <div className="card-hd"><div className="ct">ICP Breakdown</div></div>
+                    <div style={{paddingTop:4}}>
+                      {[
+                        {lbl:'High-fit (score 61+)',    sub:'Prioritise for manual follow-up',  n:leads.filter(l=>l.leadScore>60&&l.contactEmail&&!l.disqualified).length,   c:'#16a34a'},
+                        {lbl:'Mid-fit (score 21–60)',   sub:'Good for bulk sequences',           n:leads.filter(l=>l.leadScore>20&&l.leadScore<=60&&l.contactEmail&&!l.disqualified).length, c:'#d97706'},
+                        {lbl:'Low signal (0–20)',       sub:'Consider disqualifying',            n:leads.filter(l=>l.leadScore<=20&&!l.disqualified).length,                  c:'#6b7280'},
+                        {lbl:'No contact email',        sub:'Run Hunter enrichment',             n:leads.filter(l=>!l.contactEmail&&!l.disqualified).length,                  c:'#2563eb'},
+                        {lbl:'Bounced',                 sub:'Find replacement email',            n:bounced,                                                                   c:'#E84142'},
+                        {lbl:'Disqualified',            sub:'Removed from pipeline',             n:disq,                                                                      c:'var(--b2)'},
+                      ].map(m=>(
+                        <div key={m.lbl} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid var(--b)'}}>
+                          <div>
+                            <div style={{fontFamily:'var(--body)',fontSize:12,fontWeight:600,color:'var(--ink)',marginBottom:1}}>{m.lbl}</div>
+                            <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{m.sub}</div>
+                          </div>
+                          <div style={{fontFamily:'var(--sans)',fontSize:24,fontWeight:800,letterSpacing:'-1px',color:m.c,lineHeight:1,minWidth:36,textAlign:'right'}}>{m.n}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </>
+            )
+          })()}
+
         </div>
       </div>
     </>
   )
 }
+
