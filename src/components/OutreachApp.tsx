@@ -1317,12 +1317,23 @@ export default function App(){
                   <button className="btn btn-dark" onClick={()=>setTab('scrape')}>Go to Scraper</button>
                 </div>
               ):(
-                <div className="tw">
-                  <table>
+                <div className="tw" style={{overflow:'hidden'}}>
+                  {/* Sticky header — outside the scroll container */}
+                  <table style={{tableLayout:'fixed',width:'100%'}}>
+                    <colgroup>
+                      <col style={{width:32}}/><col style={{width:'22%'}}/><col style={{width:64}}/><col style={{width:'22%'}}/><col style={{width:110}}/><col style={{width:130}}/><col style={{width:80}}/><col style={{width:60}}/><col style={{width:80}}/>
+                    </colgroup>
                     <thead><tr>
-                      <th><input type="checkbox" className="ck" onChange={e=>setSel(e.target.checked?new Set(leads.map(l=>l.id)):new Set())}/></th>
+                      <th style={{padding:'10px 12px'}}><input type="checkbox" className="ck" onChange={e=>setSel(e.target.checked?new Set(leads.map(l=>l.id)):new Set())}/></th>
                       <th>Company</th><th>Score</th><th>Contact Email</th><th>Status</th><th>Sequence</th><th>Stars</th><th>Email</th><th></th>
                     </tr></thead>
+                  </table>
+                  {/* Scrollable body */}
+                  <div style={{maxHeight:520,overflowY:'auto'}}>
+                  <table style={{tableLayout:'fixed',width:'100%'}}>
+                    <colgroup>
+                      <col style={{width:32}}/><col style={{width:'22%'}}/><col style={{width:64}}/><col style={{width:'22%'}}/><col style={{width:110}}/><col style={{width:130}}/><col style={{width:80}}/><col style={{width:60}}/><col style={{width:80}}/>
+                    </colgroup>
                     <tbody>
                       {leads.map(lead=>(
                         <tr key={lead.id} className={sel.has(lead.id)?'sel':''}>
@@ -1356,6 +1367,7 @@ export default function App(){
                       ))}
                     </tbody>
                   </table>
+                  </div>{/* end scrollable body */}
                 </div>
               )}
             </div>
