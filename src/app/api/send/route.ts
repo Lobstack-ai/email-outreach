@@ -35,13 +35,18 @@ async function appendToSent(user: string, pass: string, raw: string) {
 }
 
 // Mark lead as bounced in Airtable
-async function markBounced(recordId: string) {
+async function markBounced(recordId: string, reason: string) {
   if (!recordId) return
   await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}/${recordId}`, {
     method:  'PATCH',
     headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      fields: { 'Bounced': true, 'Status': 'New' },
+      fields: {
+        'Bounced':      true,
+        'Bounce Reason': reason.slice(0, 200),
+        'Status':       'New',
+        'Sequence Status': 'Cold',
+      },
       typecast: true,
     }),
   }).catch(() => {})
@@ -116,17 +121,18 @@ ${body.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^/,'<p>').repla
   } catch (e: any) {
     const msg = e.message || ''
 
-    // Bounce detection — SMTP 550/551/552/553 = permanent failure
-    const isBounce = /55[0-3]|user.?unknown|no.?such.?user|invalid.?recipient|does.?not.?exist/i.test(msg)
-    if (isBounce && recordId) {
-      markBounced(recordId).catch(() => {})
-    }
+    // SMTP hard bounce detection — permanent failures (5xx)
+    const isBounce = /55[0-4]|user.?unknown|no.?such.?user|invalid.?recipient|does.?not.?exist|mailbox.?not.?found|address.?rejected|not.?a.?valid|undeliverable|account.?does.?not|bad.?destination/i.test(msg)
 
     let userError = msg
     if (isBounce)                                      userError = `Bounced: email address does not exist (${to})`
     else if (/535|auth/i.test(msg))                    userError = `SMTP auth failed — check credentials`
     else if (/timeout|ECONNREFUSED/i.test(msg))        userError = `SMTP connection failed`
     else if (/554|spam|JFE/i.test(msg))                userError = `Blocked by spam filter — reduce send volume`
+
+    if (isBounce && recordId) {
+      markBounced(recordId, userError).catch(() => {})
+    }
 
     return NextResponse.json({ ok: false, error: userError, bounced: isBounce }, { status: 500 })
   }

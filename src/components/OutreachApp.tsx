@@ -43,7 +43,7 @@ type Lead={
   // Reply fields
   replyText:string; replyIntent:string; suggestedReply:string; replySent:boolean;
   // Tracking + ICP
-  openCount:number; lastOpened:string; bounced:boolean; disqualified:boolean;
+  openCount:number; lastOpened:string; bounced:boolean; disqualified:boolean; emailVerified:boolean; bounceReason:string;
 }
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
@@ -99,6 +99,8 @@ function mapRecord(r:any):Lead{
     lastOpened:     g('Last Opened'),
     bounced:        !!(f['Bounced']),
     disqualified:   !!(f['Disqualified']),
+    emailVerified:  !!(f['Email Verified']),
+    bounceReason:   g('Bounce Reason'),
   }
 }
 
@@ -607,8 +609,16 @@ export default function App(){
   }
 
   const genEmails=async()=>{
-    const targets=leads.filter(l=>!l.emailBody&&(sel.size===0||sel.has(l.id)))
-    if(!targets.length){toast('No leads need emails','w');return}
+    const all=leads.filter(l=>!l.emailBody&&(sel.size===0||sel.has(l.id)))
+    // Gate: only generate for leads that have a verified/enriched contact email
+    const targets=all.filter(l=>l.contactEmail&&l.contactEmail.includes('@'))
+    const skipped=all.length-targets.length
+    if(!targets.length){
+      if(skipped>0) toast(`${skipped} lead${skipped===1?'':'s'} have no contact email — enrich first`,'w')
+      else toast('No leads need emails','w')
+      return
+    }
+    if(skipped>0) addLog(`  ⚠ Skipping ${skipped} leads with no contact email (enrich first)`,'w')
     setGenning(true);setGenPct(0)
     addLog(`=== Generating ${targets.length} emails + sequences ===`,'i')
     for(let i=0;i<targets.length;i++){

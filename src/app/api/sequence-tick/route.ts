@@ -71,12 +71,24 @@ async function sendEmail(to: string, subject: string, body: string, recordId?: s
 
 // ── IMAP reply checker ────────────────────────────────────────────────────────
 // Connects to PrivateEmail IMAP, reads unseen messages, matches to leads
+// NDR bounce patterns — emails from mail servers reporting delivery failure
+const NDR_SENDERS    = /mailer-daemon|postmaster|mail-delivery|delivery.status|bounce|noreply@.*mail/i
+const NDR_SUBJECTS   = /undeliverable|delivery.fail|returned.mail|delivery.status|bounce|could.not.deliver|non.delivery/i
+const NDR_BODY_ADDRS = /(?:failed recipient|original recipient|final recipient|to:|for)\s*<([^>]+@[^>]+)>/gi
+
+// Extract the original recipient email from an NDR body
+function extractNDRRecipient(text: string): string | null {
+  NDR_BODY_ADDRS.lastIndex = 0
+  const m = NDR_BODY_ADDRS.exec(text)
+  return m ? m[1].toLowerCase().trim() : null
+}
+
 async function checkInboxForReplies(
   contactEmails: Set<string>,
   since: Date
 ): Promise<{ from: string; subject: string; text: string }[]> {
-  const host  = process.env.SMTP_EMAIL!
-  const pass  = process.env.SMTP_PASSWORD!
+  const host    = process.env.SMTP_EMAIL!
+  const pass    = process.env.SMTP_PASSWORD!
   const replies: { from: string; subject: string; text: string }[] = []
 
   const client = new ImapFlow({
@@ -92,28 +104,46 @@ async function checkInboxForReplies(
     await client.connect()
     await client.mailboxOpen('INBOX')
 
-    // Search for unseen messages since our last check
-    const sinceStr = since.toISOString().split('T')[0]
+    const sinceStr     = since.toISOString().split('T')[0]
     const searchResult = await client.search({ seen: false, since: new Date(sinceStr) })
-    const msgs = Array.isArray(searchResult) ? searchResult : []
+    const msgs         = Array.isArray(searchResult) ? searchResult : []
 
     if (msgs.length > 0) {
       for await (const msg of client.fetch(msgs, { envelope: true, bodyStructure: true, source: true })) {
-        const fromAddr = msg.envelope?.from?.[0]?.address?.toLowerCase() || ''
+        const fromAddr  = msg.envelope?.from?.[0]?.address?.toLowerCase() || ''
+        const subject   = msg.envelope?.subject || ''
+        const raw       = msg.source?.toString() || ''
+        const text      = extractPlainText(raw)
+
         if (!fromAddr) continue
 
-        // Check if this is from one of our lead contact emails
-        if (!contactEmails.has(fromAddr)) continue
+        // ── Normal reply from a lead ──────────────────────────────────────
+        if (contactEmails.has(fromAddr)) {
+          replies.push({ from: fromAddr, subject, text })
+          await client.messageFlagsAdd([msg.seq], ['\\Seen'])
+          continue
+        }
 
-        // Extract plain text body
-        const raw    = msg.source?.toString() || ''
-        const text   = extractPlainText(raw)
-        const subject = msg.envelope?.subject || ''
+        // ── NDR / bounce from a mail server ──────────────────────────────
+        const isNDRSender  = NDR_SENDERS.test(fromAddr)
+        const isNDRSubject = NDR_SUBJECTS.test(subject)
 
-        replies.push({ from: fromAddr, subject, text })
+        if (isNDRSender || isNDRSubject) {
+          // Extract who the bounce is about
+          const failedRecipient = extractNDRRecipient(text) ||
+            // Fallback: search body for any known contact email
+            Array.from(contactEmails).find(e => raw.toLowerCase().includes(e))
 
-        // Mark as seen so we don't process it again
-        await client.messageFlagsAdd([msg.seq], ['\\Seen'])
+          if (failedRecipient && contactEmails.has(failedRecipient)) {
+            // Return as a special bounce reply — handled separately in cron
+            replies.push({
+              from:    failedRecipient,
+              subject: subject,
+              text:    `__NDR_BOUNCE__ ${text.slice(0, 500)}`,
+            })
+          }
+          await client.messageFlagsAdd([msg.seq], ['\\Seen'])
+        }
       }
     }
 
@@ -121,7 +151,6 @@ async function checkInboxForReplies(
     await client.logout()
   } catch (e: any) {
     console.error('IMAP error:', e.message)
-    // Non-fatal — if IMAP fails, follow-up sequencing still runs
     try { await client.logout() } catch {}
   }
 
@@ -221,6 +250,39 @@ export async function GET(req: NextRequest) {
         if (!record) continue
 
         const company = record.fields['Company'] || reply.from
+
+        // ── Handle NDR bounce ─────────────────────────────────────────────
+        if (reply.text.startsWith('__NDR_BOUNCE__')) {
+          const bounceReason = reply.text.replace('__NDR_BOUNCE__ ', '').slice(0, 200)
+          await atPatch(record.id, {
+            'Bounced':         true,
+            'Bounce Reason':   bounceReason,
+            'Status':          'New',
+            'Sequence Status': 'Cold',
+          })
+          await atLog({
+            'Campaign ID':   `BOUNCE-${Date.now()}`,
+            'Company':       company,
+            'Contact Email': reply.from,
+            'Subject':       reply.subject,
+            'Sequence Step': 'Bounce',
+            'Sent At':       now.toISOString(),
+            'Result':        'Bounced - NDR',
+          })
+          sendDiscordNotification({
+            type:          'new_reply',
+            company,
+            contactName:   record.fields['Contact Name'] || '',
+            email:         reply.from,
+            intent:        'unsubscribe',
+            summary:       `⚡ Email bounced — NDR received. Address likely invalid.`,
+            suggestedReply: 'Find a replacement email address for this contact.',
+          }).catch(() => {})
+          activeLookup.delete(reply.from.toLowerCase())
+          results.repliesFound++
+          continue
+        }
+
         const classification = await classifyReply(reply.text, company)
 
         const statusMap: Record<string, string> = {
