@@ -492,12 +492,14 @@ export default function App(){
     setDiscovering(false)
   }
 
-  const scrapeOne = async (tgt: {org: string; name: string; type: string; website?: string}) => {
+  const scrapeOne = async (tgt: {org: string; name: string; type: string; website?: string; source?: string}) => {
     setScrSt(p => ({...p, [tgt.org]: 'running'}))
     try {
       const websiteParam = tgt.website ? `&website=${encodeURIComponent(tgt.website)}` : ''
-      const typeParam = tgt.type ? `&type=${encodeURIComponent(tgt.type)}` : ''
-      const r = await fetch(`/api/scrape?org=${tgt.org}${websiteParam}${typeParam}`).then(r => r.json())
+      const typeParam   = tgt.type   ? `&type=${encodeURIComponent(tgt.type)}` : ''
+      const nameParam   = tgt.name   ? `&name=${encodeURIComponent(tgt.name)}` : ''
+      const sourceParam = `&source=${scrapeSource==='github'?'github':'yc'}`
+      const r = await fetch(`/api/scrape?org=${tgt.org}${websiteParam}${typeParam}${nameParam}${sourceParam}`).then(r => r.json())
       if (!r.ok) throw new Error(r.error)
       setScraped(p => ({...p, [tgt.org]: r.data}))
       setScrSt(p => ({...p, [tgt.org]: 'done'}))
@@ -1429,65 +1431,54 @@ export default function App(){
               )
             })()}
 
-            {/* FILTER BAR */}
-            <div className="card" style={{padding:'14px 20px',marginBottom:12,background:'var(--s2)'}}>
-              <div style={{display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
-                <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'1px',flexShrink:0}}>Filters</div>
+            {/* SOURCE-AWARE FILTER BAR */}
+            <div className="card" style={{padding:'12px 16px',marginBottom:12,background:'var(--s2)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',flexShrink:0}}>Sort & Filter</span>
 
-                {/* Sort by */}
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Sort</span>
-                  <select value={filterSortBy} onChange={e=>setFilterSortBy(e.target.value as any)}
-                    style={{fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)',cursor:'pointer'}}>
-                    <option value="score">Lead Score</option>
-                    <option value="stars">Stars</option>
-                    <option value="forks">Forks</option>
-                    <option value="members">Org Members</option>
-                    <option value="watchers">Watchers</option>
-                  </select>
-                </div>
+                {/* Sort — always shown */}
+                <select value={filterSortBy} onChange={e=>setFilterSortBy(e.target.value as any)}
+                  style={{fontFamily:'var(--mono)',fontSize:11,padding:'5px 10px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)',cursor:'pointer'}}>
+                  <option value="score">↓ Lead Score</option>
+                  {scrapeSource==='github'&&<option value="stars">↓ Stars</option>}
+                  {scrapeSource==='github'&&<option value="forks">↓ Forks</option>}
+                  {scrapeSource==='github'&&<option value="members">↓ Members</option>}
+                </select>
 
-                {/* Min stars */}
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min ⭐</span>
-                  <input type="number" min={0} value={filterMinStars} onChange={e=>setFilterMinStars(Number(e.target.value))}
-                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
-                </div>
+                {/* GitHub-specific filters */}
+                {scrapeSource==='github'&&<>
+                  <div style={{display:'flex',alignItems:'center',gap:5}}>
+                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min ⭐</span>
+                    <input type="number" min={0} value={filterMinStars} onChange={e=>setFilterMinStars(Number(e.target.value))}
+                      style={{width:64,fontFamily:'var(--mono)',fontSize:11,padding:'5px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:5}}>
+                    <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min members</span>
+                    <input type="number" min={0} value={filterMinMembers} onChange={e=>setFilterMinMembers(Number(e.target.value))}
+                      style={{width:56,fontFamily:'var(--mono)',fontSize:11,padding:'5px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                  </div>
+                </>}
 
-                {/* Min forks */}
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min forks</span>
-                  <input type="number" min={0} value={filterMinForks} onChange={e=>setFilterMinForks(Number(e.target.value))}
-                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
-                </div>
-
-                {/* Min members */}
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min members</span>
-                  <input type="number" min={0} value={filterMinMembers} onChange={e=>setFilterMinMembers(Number(e.target.value))}
-                    style={{width:70,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
-                </div>
-
-                {/* Min lead score */}
-                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                {/* Min score — all sources */}
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
                   <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Min score</span>
                   <input type="number" min={0} max={100} value={filterMinScore} onChange={e=>setFilterMinScore(Number(e.target.value))}
-                    style={{width:60,fontFamily:'var(--mono)',fontSize:11,padding:'4px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
+                    style={{width:52,fontFamily:'var(--mono)',fontSize:11,padding:'5px 8px',borderRadius:'var(--r)',border:'1px solid var(--b2)',background:'var(--s1)',color:'var(--ink)'}}/>
                 </div>
 
-                {/* Email only toggle */}
-                <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                {/* Has email toggle */}
+                <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',userSelect:'none'}}>
                   <input type="checkbox" checked={filterShowHasEmail} onChange={e=>setFilterShowHasEmail(e.target.checked)}
                     style={{accentColor:'var(--red2)',width:13,height:13}}/>
-                  Has email
+                  Email found
                 </label>
 
                 {/* Reset */}
                 {(filterMinStars>0||filterMinForks>0||filterMinMembers>0||filterMinScore>0||filterShowHasEmail||filterSortBy!=='score')&&(
-                  <button className="btn btn-ghost btn-xs" onClick={()=>{
+                  <button className="btn btn-ghost btn-xs" style={{marginLeft:'auto'}} onClick={()=>{
                     setFilterMinStars(0);setFilterMinForks(0);setFilterMinMembers(0);
                     setFilterMinScore(0);setFilterShowHasEmail(false);setFilterSortBy('score');
-                  }}>✕ Reset</button>
+                  }}>✕ Reset filters</button>
                 )}
               </div>
             </div>
@@ -1522,9 +1513,9 @@ export default function App(){
                 <div className="card">
                   <div className="card-hd">
                     <div className="ct">
-                      Discovered Orgs
+                      {scrapeSource==='github'?'GitHub Orgs':scrapeSource==='yc'?'YC Companies + Show HN':scrapeSource==='hackernews'?'HN Hiring Posts':'LinkedIn Companies'}
                       {discovered.length>0&&<span style={{color:'var(--green)',fontSize:11,fontWeight:400,marginLeft:8}}>
-                        {filtered.length} shown{filtered.length!==discovered.length?` of ${discovered.length}`:''}
+                        {filtered.length} of {discovered.length}
                       </span>}
                     </div>
                   </div>
@@ -1561,7 +1552,7 @@ export default function App(){
                         return(
                           <div key={org.org}
                             className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                            onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website||org.url})}>
+                            onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website||org.url,source:org.source||scrapeSource})}>
                             <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:4}}>
                               <div className="sn" style={{flex:1}}>{org.name}</div>
                               <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',flexShrink:0}}>{srcIcon}</span>
