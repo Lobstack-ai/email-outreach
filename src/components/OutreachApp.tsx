@@ -371,6 +371,7 @@ export default function App(){
   const[hl,setHL]=useState(false)
   const[scrSt,setScrSt]=useState<Record<string,'idle'|'running'|'done'|'fail'>>({})
   const[scraped,setScraped]=useState<Record<string,any>>({})
+  const[scrapeSource,setScrapeSource]=useState<'github'|'producthunt'|'hackernews'|'linkedin'>('github')
   const[sel,setSel]=useState<Set<string>>(new Set())
   const[genning,setGenning]=useState(false)
   const[genPct,setGenPct]=useState(0)
@@ -443,26 +444,41 @@ export default function App(){
   const discoverOrgs = async () => {
     setDiscovering(true)
     setDiscovered([])
-    addLog('=== Discovering new orgs from GitHub search ===', 'i')
+    const sourceLabels: Record<string,string> = {
+      github:'GitHub', producthunt:'Product Hunt', hackernews:'Hacker News', linkedin:'LinkedIn'
+    }
+    addLog(`=== Discovering new leads from ${sourceLabels[scrapeSource]} ===`, 'i')
     try {
-      // Build existing set from GitHub org URLs — extract the slug from the URL
-      const existingSlugs = leads
-        .map(l => {
-          const url = l.githubOrgUrl || ''
-          // Extract slug from https://github.com/orgname or https://github.com/orgname/repo
-          const match = url.match(/github\.com\/([^\/\s]+)/i)
-          return match ? match[1].toLowerCase() : ''
-        })
-        .filter(Boolean)
-      const existingParam = existingSlugs.join(',')
-      addLog(`  Excluding ${existingSlugs.length} orgs already in CRM`, 'i')
-      const r = await fetch(`/api/discover?queries=8&limit=60&existing=${existingParam}`).then(r => r.json())
-      if (!r.ok) throw new Error(r.error)
-      setDiscovered(r.orgs)
-      addLog(`✓ Discovered ${r.orgs.length} new orgs not in your CRM`, 'o')
-      if (r.queriesUsed?.length) addLog(`  Queries: ${r.queriesUsed.slice(0,3).join(' · ')}...`, 'i')
+      let orgs: any[] = []
+      if (scrapeSource === 'github') {
+        const existingSlugs = leads.map(l=>{
+          const url = l.githubOrgUrl||''
+          const m = url.match(/github\.com\/([^\/\s]+)/i)
+          return m?m[1].toLowerCase():''
+        }).filter(Boolean)
+        addLog(`  Excluding ${existingSlugs.length} orgs already in CRM`, 'i')
+        const r = await fetch(`/api/discover?queries=8&limit=60&existing=${existingSlugs.join(',')}`).then(r=>r.json())
+        if (!r.ok) throw new Error(r.error)
+        orgs = r.orgs
+        if (r.queriesUsed?.length) addLog(`  Queries: ${r.queriesUsed.slice(0,3).join(' · ')}...`, 'i')
+      } else if (scrapeSource === 'producthunt') {
+        const r = await fetch('/api/discover-ph').then(r=>r.json())
+        if (!r.ok) throw new Error(r.error||'Product Hunt discovery failed')
+        orgs = r.orgs
+      } else if (scrapeSource === 'hackernews') {
+        const r = await fetch('/api/discover-hn').then(r=>r.json())
+        if (!r.ok) throw new Error(r.error||'HN discovery failed')
+        orgs = r.orgs
+      } else if (scrapeSource === 'linkedin') {
+        const r = await fetch('/api/discover-li').then(r=>r.json())
+        if (!r.ok) throw new Error(r.setup||r.error||'LinkedIn discovery failed')
+        orgs = r.orgs
+      }
+      setDiscovered(orgs)
+      addLog(`✓ Found ${orgs.length} new leads from ${sourceLabels[scrapeSource]}`, 'o')
     } catch(e: any) {
-      addLog(`✗ Discovery: ${e.message}`, 'e')
+      addLog(`✗ Discovery failed: ${e.message}`, 'e')
+      toast(e.message, 'e')
     }
     setDiscovering(false)
   }
@@ -1196,23 +1212,68 @@ export default function App(){
           {/* ══ SCRAPE ══ */}
           {tab==='scrape'&&<>
             <div className="ph">
-              <div className="ph-t">GitHub Lead Scraper</div>
-              <div className="ph-s">Discover fresh AI-forward companies · filter by metrics · enrich with contact emails</div>
+              <div className="ph-t">Lead Discovery</div>
+              <div className="ph-s">Multi-source lead gen · GitHub · Product Hunt · Hacker News · LinkedIn · same enrich → generate → send flow</div>
             </div>
 
-            {/* ACTION BAR */}
+            {/* SOURCE SELECTOR */}
             <div className="card" style={{padding:'16px 20px',marginBottom:12}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
-                <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)'}}>
-                  🔍 Discover New Orgs
-                  <span style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',fontWeight:400,marginLeft:8}}>Live GitHub search · filters out existing CRM leads</span>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',flexShrink:0}}>Source</span>
+                <div style={{display:'flex',gap:6,flex:1,flexWrap:'wrap'}}>
+                  {([
+                    {id:'github',      label:'GitHub',        icon:'⚡', desc:'AI orgs via search · stars · open source signal'},
+                    {id:'producthunt', label:'Product Hunt',  icon:'🚀', desc:'Newly launched AI tools · founder contacts'},
+                    {id:'hackernews',  label:'Hacker News',   icon:'🗞',  desc:"Who's Hiring threads · AI teams recruiting"},
+                    {id:'linkedin',    label:'LinkedIn',       icon:'💼', desc:'Company search via Proxycurl API'},
+                  ] as {id:'github'|'producthunt'|'hackernews'|'linkedin',label:string,icon:string,desc:string}[]).map(s=>(
+                    <button key={s.id}
+                      onClick={()=>{setScrapeSource(s.id);setDiscovered([]);setScrSt({});setScraped({})}}
+                      style={{
+                        display:'flex',flexDirection:'column',alignItems:'flex-start',
+                        padding:'10px 14px',borderRadius:'var(--r)',
+                        border:`1.5px solid ${scrapeSource===s.id?'var(--red2)':'var(--b)'}`,
+                        background:scrapeSource===s.id?'#E8414208':'var(--s2)',
+                        cursor:'pointer',transition:'all .12s',flex:1,minWidth:130,textAlign:'left',
+                      }}>
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
+                        <span style={{fontSize:13}}>{s.icon}</span>
+                        <span style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:12,
+                          color:scrapeSource===s.id?'var(--red2)':'var(--ink)'}}>{s.label}</span>
+                        {scrapeSource===s.id&&<span style={{fontFamily:'var(--mono)',fontSize:8,
+                          color:'var(--red2)',marginLeft:'auto'}}>ACTIVE</span>}
+                      </div>
+                      <div style={{fontFamily:'var(--body)',fontSize:10,color:'var(--ink4)',lineHeight:1.4}}>{s.desc}</div>
+                    </button>
+                  ))}
                 </div>
+              </div>
+
+              {scrapeSource==='linkedin'&&(
+                <div style={{marginBottom:12,padding:'10px 14px',background:'#d9770610',borderRadius:'var(--r)',
+                  border:'1px solid #d9770630',fontFamily:'var(--mono)',fontSize:11,color:'var(--yellow)'}}>
+                  ⚠ Requires <code style={{background:'var(--s3)',padding:'1px 5px',borderRadius:3}}>PROXYCURL_API_KEY</code> in Vercel env vars ·{' '}
+                  <a href="https://nubela.co/proxycurl" target="_blank" rel="noopener noreferrer"
+                    style={{color:'var(--yellow)'}}>nubela.co/proxycurl</a> — 10 free credits on signup
+                </div>
+              )}
+
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10}}>
+                <span style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
+                  {scrapeSource==='github'&&'15 rotating queries · deduped against CRM · 5,000 req/hr'}
+                  {scrapeSource==='producthunt'&&'Pulls recent AI posts from PH RSS · no auth needed'}
+                  {scrapeSource==='hackernews'&&"Parses latest Who's Hiring threads via HN Algolia API"}
+                  {scrapeSource==='linkedin'&&'Searches LinkedIn companies via Proxycurl · $0.01/lookup'}
+                </span>
                 <div className="btn-row">
                   <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
-                    {discovering?'Searching...':'🔍 Discover Orgs'}
+                    {discovering?'Searching...':`🔍 Discover from ${
+                      scrapeSource==='github'?'GitHub':
+                      scrapeSource==='producthunt'?'Product Hunt':
+                      scrapeSource==='hackernews'?'Hacker News':'LinkedIn'
+                    }`}
                   </button>
-                  <button className="btn btn-dark"
-                    onClick={scrapeAll}
+                  <button className="btn btn-dark" onClick={scrapeAll}
                     disabled={Object.values(scrSt).some(s=>s==='running')||!discovered.length}>
                     Enrich All
                   </button>
@@ -1328,28 +1389,63 @@ export default function App(){
                   )}
                   {!discovering&&discovered.length===0&&(
                     <div className="empty">
-                      <div className="empty-ico">🔍</div>
-                      <div className="empty-t">Click Discover Orgs to find fresh leads</div>
-                      <div className="empty-s">Runs 6 parallel GitHub searches for orgs building with AI. Excludes companies already in your CRM.</div>
+                      <div className="empty-ico">
+                        {scrapeSource==='github'?'⚡':scrapeSource==='producthunt'?'🚀':scrapeSource==='hackernews'?'🗞':'💼'}
+                      </div>
+                      <div className="empty-t">
+                        {scrapeSource==='github'&&'Click Discover to find AI orgs on GitHub'}
+                        {scrapeSource==='producthunt'&&'Click Discover to pull recent AI launches from Product Hunt'}
+                        {scrapeSource==='hackernews'&&"Click Discover to scan HN Who's Hiring threads"}
+                        {scrapeSource==='linkedin'&&'Click Discover to search LinkedIn companies via Proxycurl'}
+                      </div>
+                      <div className="empty-s">
+                        {scrapeSource==='github'&&'15 rotating search queries · deduped vs your CRM · enriches org members + emails'}
+                        {scrapeSource==='producthunt'&&'No auth needed · pulls from RSS · filters for AI/ML/dev tools'}
+                        {scrapeSource==='hackernews'&&'Parses latest hiring posts · extracts company + website · filters for AI signal'}
+                        {scrapeSource==='linkedin'&&'Requires PROXYCURL_API_KEY · 10 free credits on signup · $0.01/lookup'}
+                      </div>
                     </div>
                   )}
                   {filtered.length>0&&(
                     <div className="sg">
                       {filtered.map((org:any)=>{
                         const st=scrSt[org.org]||'idle', d=scraped[org.org]
-                        const score=d?.leadScore
+                        const score=d?.leadScore||org.score||0
+                        const srcIcon=org.source==='producthunt'?'🚀':org.source==='hackernews'?'🗞':org.source==='linkedin'?'💼':'⚡'
                         return(
                           <div key={org.org}
                             className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
-                            onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website})}>
-                            <div className="sn">{org.name}</div>
-                            <div className="stype">{org.type}</div>
-                            <div className="sstar">⭐ {(org.stars||0).toLocaleString()}</div>
+                            onClick={()=>(st==='idle'||st==='fail')&&scrapeOne({org:org.org,name:org.name,type:org.type,website:org.website||org.url})}>
+                            <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:4}}>
+                              <div className="sn" style={{flex:1}}>{org.name}</div>
+                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',flexShrink:0}}>{srcIcon}</span>
+                            </div>
+                            <div className="stype">{org.tagline||org.type}</div>
+                            {/* Source-specific signals */}
+                            {org.source==='github'&&<div className="sstar">⭐ {(org.stars||0).toLocaleString()}</div>}
+                            {org.source==='producthunt'&&org.votes>0&&<div className="sstar">▲ {org.votes} upvotes</div>}
+                            {org.source==='hackernews'&&<div className="sstar" style={{color:'var(--yellow)'}}>🗞 HN Hiring</div>}
+                            {org.source==='linkedin'&&org.followers>0&&<div className="sstar">👥 {org.followers.toLocaleString()} followers</div>}
+                            {/* Score badge */}
+                            {score>0&&!d&&(
+                              <div style={{marginTop:4}}>
+                                <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,
+                                  background:score>=70?'#16a34a15':score>=40?'#d9770615':'var(--s3)',
+                                  color:score>=70?'var(--green)':score>=40?'var(--yellow)':'var(--ink3)'}}>
+                                  score {score}
+                                </span>
+                              </div>
+                            )}
+                            {/* Enriched data */}
                             {d?<>
                               <div style={{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}}>
                                 {d.githubForks>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>⑂{d.githubForks}</span>}
                                 {d.orgMembers>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>👥{d.orgMembers}</span>}
-                                {score>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:score>=70?'#16a34a15':score>=40?'#d9770615':'var(--s3)',color:score>=70?'var(--green)':score>=40?'var(--yellow)':'var(--ink3)'}}>{score}</span>}
+                                {d.leadScore>0&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,
+                                  background:d.leadScore>=70?'#16a34a15':d.leadScore>=40?'#d9770615':'var(--s3)',
+                                  color:d.leadScore>=70?'var(--green)':d.leadScore>=40?'var(--yellow)':'var(--ink3)'}}>
+                                  {d.leadScore}
+                                </span>}
                               </div>
                               {d.contactEmail
                                 ?<div className="sst" style={{color:'var(--green)'}}>✓ {d.contactEmail}</div>
