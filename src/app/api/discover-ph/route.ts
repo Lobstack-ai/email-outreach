@@ -1,81 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { buildPHTopics } from '@/lib/topics'
+import { buildTopicTags } from '@/lib/topics'
+
+// Y Combinator Companies API — fully public, no auth needed
+// Perfect ICP: funded AI startups, active teams, verified websites
+const YC_API = 'https://api.ycombinator.com/v0.1/companies'
+
+// Also mines HN "Show HN" posts for new products
+const HN_SEARCH = 'https://hn.algolia.com/api/v1/search'
 
 const SKIP = new Set([
-  'openai','anthropic','google','microsoft','meta','amazon','apple',
-  'notion','figma','linear','vercel','stripe','twilio','github',
+  'google','microsoft','amazon','apple','meta','netflix','uber','airbnb',
+  'stripe','twilio','salesforce','oracle','ibm','intel','openai','anthropic',
 ])
 
-// Score a PH post 0–100
-function scorePost(post: any): number {
-  const votes    = post.votesCount    || 0
-  const comments = post.commentsCount || 0
-  const hasSite  = !!(post.website || post.makers?.[0]?.websiteUrl)
-  const hasMaker = !!(post.makers?.[0]?.name)
-  return Math.min(100, Math.round(
-    Math.log10(Math.max(votes, 1))    * 25 +
-    Math.log10(Math.max(comments, 1)) * 10 +
-    (hasSite  ? 15 : 0) +
-    (hasMaker ? 10 : 0)
-  ))
-}
+const AI_TAGS = new Set([
+  'Artificial Intelligence','Machine Learning','AI','Developer Tools',
+  'NLP','Computer Vision','Generative AI','LLM','AI Assistant',
+  'Robotics','Data Science','MLOps','AI Infrastructure','Fintech',
+  'Crypto / Web3','B2B','SaaS',
+])
 
-async function fetchPosts(topic: string): Promise<any[]> {
-  // PH has a public posts endpoint by topic — no auth needed for basic data
-  const url = `https://www.producthunt.com/frontend/graphql`
-  const query = `{
-    topic(slug: "${topic}") {
-      posts(first: 20, order: NEWEST) {
-        nodes {
-          id name tagline description url votesCount commentsCount
-          website createdAt
-          makers { name headline twitterUsername websiteUrl }
-          topics { nodes { name } }
-        }
-      }
-    }
-  }`
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ query }),
-      signal: AbortSignal.timeout(8000),
-    })
-    const d = await r.json()
-    return d?.data?.topic?.posts?.nodes || []
-  } catch {
-    return []
-  }
-}
-
-async function fetchPostsRSS(topic: string): Promise<any[]> {
-  // Fallback: use PH RSS which is fully public
-  try {
-    const r = await fetch(`https://www.producthunt.com/topics/${topic}/feed`, {
-      signal: AbortSignal.timeout(8000),
-    })
-    const xml = await r.text()
-    const items: any[] = []
-    const itemRx = /<item>([\s\S]*?)<\/item>/g
-    let m
-    while ((m = itemRx.exec(xml)) !== null) {
-      const block = m[1]
-      const title   = (/<title><!\[CDATA\[(.*?)\]\]><\/title>/.exec(block)?.[1] || '').trim()
-      const link    = (/<link>(.*?)<\/link>/.exec(block)?.[1] || '').trim()
-      const desc    = (/<description><!\[CDATA\[(.*?)\]\]><\/description>/.exec(block)?.[1] || '').trim()
-      const pubDate = (/<pubDate>(.*?)<\/pubDate>/.exec(block)?.[1] || '').trim()
-      if (title) items.push({ title, link, description: desc, pubDate })
-    }
-    return items
-  } catch {
-    return []
-  }
+function scoreYCCompany(co: any, topicTags: string[]): number {
+  const teamSize  = co.teamSize || 0
+  const isHiring  = co.badges?.includes('isHiring') ? 10 : 0
+  const hasWeb    = co.website ? 10 : 0
+  const tagBonus  = topicTags.length > 0
+    ? co.tags?.filter((t: string) => topicTags.some(tt => t.toLowerCase().includes(tt.toLowerCase()))).length * 8
+    : 0
+  const sizeScore = teamSize > 0 && teamSize < 50 ? 20 : teamSize < 200 ? 12 : 5
+  return Math.min(100, 30 + sizeScore + isHiring + hasWeb + Math.min(tagBonus, 25))
 }
 
 export async function GET(req: NextRequest) {
+  const sp        = new URL(req.url).searchParams
+  const topicsParam = sp.get('topics') || ''
+  const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
+  const topicTags   = buildTopicTags(topicIds)
+
   try {
-    // Load CRM names to dedupe
+    // Load CRM to dedupe
     const crmNames = new Set<string>()
     try {
       const at = await fetch(
@@ -87,44 +50,93 @@ export async function GET(req: NextRequest) {
       }
     } catch {}
 
-    const topicsParam = new URL(req.url).searchParams.get('topics') || ''
-    const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
-    const topics      = buildPHTopics(topicIds)
-    const seen   = new Set<string>()
+    const seen = new Set<string>()
     const orgs: any[] = []
 
-    for (const topic of topics) {
-      const posts = await fetchPostsRSS(topic)
+    // ── Source 1: YC Companies (recent batches) ──────────────────────
+    const batches = ['W25', 'S24', 'W24', 'S23', 'W23']
+    const ycTags  = topicTags.length > 0 ? topicTags : ['AI','Artificial Intelligence','Machine Learning','Developer Tools']
 
-      for (const post of posts) {
-        const title = post.title || ''
-        const key   = title.toLowerCase().trim()
+    for (const batch of batches) {
+      for (const tag of ycTags.slice(0, 4)) {
+        try {
+          const params = new URLSearchParams({ batch, tags: tag })
+          const r = await fetch(`${YC_API}?${params}`, {
+            headers: { 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!r.ok) continue
+          const d = await r.json()
+          const companies = d.companies || []
 
-        if (!title || seen.has(key)) continue
-        seen.add(key)
+          for (const co of companies) {
+            const name = co.name || ''
+            const key  = name.toLowerCase().trim()
+            if (!name || seen.has(key) || crmNames.has(key)) continue
+            if (Array.from(SKIP).some(s => key.includes(s))) continue
+            seen.add(key)
 
-        const nameLower = key
-        if (Array.from(SKIP).some(s => nameLower.includes(s))) continue
-        if (crmNames.has(nameLower)) continue
-
-        const orgSlug = title.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
-
-        orgs.push({
-          source:      'producthunt',
-          org:         orgSlug,
-          name:        title,
-          type:        'AI/ML Startup',
-          website:     '',
-          url:         post.link || '',
-          tagline:     post.description?.slice(0, 120) || '',
-          description: post.description || '',
-          createdAt:   post.pubDate || '',
-          score:       40, // base score — enriched later via GitHub scrape
-        })
+            orgs.push({
+              source:      'yc',
+              org:         co.slug || key.replace(/[^a-z0-9]/g, '-'),
+              name,
+              type:        co.industries?.[0] || 'AI/ML Startup',
+              website:     co.website || '',
+              url:         co.url || `https://www.ycombinator.com/companies/${co.slug}`,
+              tagline:     co.oneLiner || '',
+              description: co.longDescription?.slice(0, 300) || co.oneLiner || '',
+              batch:       co.batch || '',
+              teamSize:    co.teamSize || 0,
+              location:    co.locations?.[0] || '',
+              tags:        co.tags || [],
+              isHiring:    co.badges?.includes('isHiring') || false,
+              score:       scoreYCCompany(co, topicTags),
+            })
+          }
+        } catch { continue }
       }
     }
 
-    return NextResponse.json({ ok: true, orgs: orgs.slice(0, 40), total: orgs.length })
+    // ── Source 2: HN "Show HN" posts ────────────────────────────────
+    const showQueries = topicTags.length > 0
+      ? topicTags.slice(0, 3).map(t => `Show HN ${t}`)
+      : ['Show HN AI agent', 'Show HN LLM', 'Show HN AI tool']
+
+    for (const q of showQueries) {
+      try {
+        const r = await fetch(
+          `${HN_SEARCH}?query=${encodeURIComponent(q)}&tags=show_hn&hitsPerPage=15`,
+          { signal: AbortSignal.timeout(6000) }
+        ).then(r => r.json())
+
+        for (const hit of r.hits || []) {
+          const title = (hit.title || '').replace(/^Show HN:\s*/i, '').trim()
+          const key   = title.toLowerCase().trim()
+          if (!title || key.length < 3 || seen.has(key) || crmNames.has(key)) continue
+          if (Array.from(SKIP).some(s => key.includes(s))) continue
+          seen.add(key)
+
+          const website = hit.url || ''
+          const domain  = website ? new URL(website).hostname.replace(/^www\./, '') : ''
+
+          orgs.push({
+            source:      'showhn',
+            org:         key.replace(/[^a-z0-9]/g, '-').slice(0, 40),
+            name:        title.slice(0, 60),
+            type:        'AI/ML Startup',
+            website,
+            url:         `https://news.ycombinator.com/item?id=${hit.objectID}`,
+            tagline:     `HN points: ${hit.points || 0} · ${domain}`,
+            description: hit.title || '',
+            score:       Math.min(100, 25 + Math.min(Math.log10(Math.max(hit.points || 1, 1)) * 15, 40)),
+          })
+        }
+      } catch { continue }
+    }
+
+    orgs.sort((a, b) => b.score - a.score)
+
+    return NextResponse.json({ ok: true, orgs: orgs.slice(0, 50), total: orgs.length })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 })
   }

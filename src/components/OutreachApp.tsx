@@ -371,7 +371,7 @@ export default function App(){
   const[hl,setHL]=useState(false)
   const[scrSt,setScrSt]=useState<Record<string,'idle'|'running'|'done'|'fail'>>({})
   const[scraped,setScraped]=useState<Record<string,any>>({})
-  const[scrapeSource,setScrapeSource]=useState<'github'|'producthunt'|'hackernews'|'linkedin'>('github')
+  const[scrapeSource,setScrapeSource]=useState<'github'|'yc'|'hackernews'|'linkedin'>('github')
   const[sel,setSel]=useState<Set<string>>(new Set())
   const[genning,setGenning]=useState(false)
   const[genPct,setGenPct]=useState(0)
@@ -450,7 +450,7 @@ export default function App(){
     setDiscovering(true)
     setDiscovered([])
     const sourceLabels: Record<string,string> = {
-      github:'GitHub', producthunt:'Product Hunt', hackernews:'Hacker News', linkedin:'LinkedIn'
+      github:'GitHub', yc:'YC + Show HN', hackernews:'Hacker News', linkedin:'LinkedIn'
     }
     addLog(`=== Discovering new leads from ${sourceLabels[scrapeSource]} ===`, 'i')
     try {
@@ -467,10 +467,10 @@ export default function App(){
         if (!r.ok) throw new Error(r.error)
         orgs = r.orgs
         if (r.queriesUsed?.length) addLog(`  Queries: ${r.queriesUsed.slice(0,3).join(' · ')}...`, 'i')
-      } else if (scrapeSource === 'producthunt') {
+      } else if (scrapeSource === 'yc') {
         const topicsQ = activeTopics.size ? `?topics=${Array.from(activeTopics).join(',')}` : ''
         const r = await fetch(`/api/discover-ph${topicsQ}`).then(r=>r.json())
-        if (!r.ok) throw new Error(r.error||'Product Hunt discovery failed')
+        if (!r.ok) throw new Error(r.error||'YC discovery failed')
         orgs = r.orgs
       } else if (scrapeSource === 'hackernews') {
         const topicsQ = activeTopics.size ? `?topics=${Array.from(activeTopics).join(',')}` : ''
@@ -1232,10 +1232,10 @@ export default function App(){
                 <div style={{display:'flex',gap:6,flex:1,flexWrap:'wrap'}}>
                   {([
                     {id:'github',      label:'GitHub',        icon:'⚡', desc:'AI orgs via search · stars · open source signal'},
-                    {id:'producthunt', label:'Product Hunt',  icon:'🚀', desc:'Newly launched AI tools · founder contacts'},
+                    {id:'yc',          label:'YC + Show HN',  icon:'🚀', desc:'YC-backed startups + HN launches · verified companies'},
                     {id:'hackernews',  label:'Hacker News',   icon:'🗞',  desc:"Who's Hiring threads · AI teams recruiting"},
                     {id:'linkedin',    label:'LinkedIn',       icon:'💼', desc:'Company search via Proxycurl API'},
-                  ] as {id:'github'|'producthunt'|'hackernews'|'linkedin',label:string,icon:string,desc:string}[]).map(s=>(
+                  ] as {id:'github'|'yc'|'hackernews'|'linkedin',label:string,icon:string,desc:string}[]).map(s=>(
                     <button key={s.id}
                       onClick={()=>{setScrapeSource(s.id);setDiscovered([]);setScrSt({});setScraped({})}}
                       style={{
@@ -1270,7 +1270,7 @@ export default function App(){
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:10}}>
                 <span style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
                   {scrapeSource==='github'&&'15 rotating queries · deduped against CRM · 5,000 req/hr'}
-                  {scrapeSource==='producthunt'&&'Pulls recent AI posts from PH RSS · no auth needed'}
+                  {scrapeSource==='yc'&&'YC Companies API · recent batches (W25/S24/W23) · Show HN launches'}
                   {scrapeSource==='hackernews'&&"Parses latest Who's Hiring threads via HN Algolia API"}
                   {scrapeSource==='linkedin'&&'Searches LinkedIn companies via Proxycurl · $0.01/lookup'}
                 </span>
@@ -1278,7 +1278,7 @@ export default function App(){
                   <button className="btn btn-dark" onClick={discoverOrgs} disabled={discovering}>
                     {discovering?'Searching...':`🔍 Discover from ${
                       scrapeSource==='github'?'GitHub':
-                      scrapeSource==='producthunt'?'Product Hunt':
+                      scrapeSource==='yc'?'YC + Show HN':
                       scrapeSource==='hackernews'?'Hacker News':'LinkedIn'
                     }`}
                   </button>
@@ -1296,26 +1296,51 @@ export default function App(){
             {(()=>{
               const TOPIC_DEFS = [
                 // AI Infrastructure
-                {id:'ai-agents',    label:'AI Agents',       emoji:'🤖', cat:'AI Infrastructure', desc:'Agent frameworks, multi-agent, runtimes'},
-                {id:'llm-infra',    label:'LLM Infra',       emoji:'⚡', cat:'AI Infrastructure', desc:'Model serving, inference, LLMOps'},
-                {id:'vector-db',    label:'Vector & RAG',    emoji:'🔍', cat:'AI Infrastructure', desc:'Vector DBs, embeddings, RAG pipelines'},
-                {id:'ai-memory',    label:'AI Memory',       emoji:'🧠', cat:'AI Infrastructure', desc:'Persistent memory, knowledge graphs'},
-                {id:'mcp-tools',    label:'MCP & Tools',     emoji:'🔧', cat:'AI Infrastructure', desc:'MCP servers, tool use, function calling'},
+                {id:'ai-agents',    label:'AI Agents',         emoji:'🤖', cat:'AI Infrastructure',  desc:'Agent frameworks, multi-agent, runtimes'},
+                {id:'llm-infra',    label:'LLM Infra',         emoji:'⚡', cat:'AI Infrastructure',  desc:'Model serving, inference, LLMOps'},
+                {id:'vector-db',    label:'Vector & RAG',      emoji:'🔍', cat:'AI Infrastructure',  desc:'Vector DBs, embeddings, RAG pipelines'},
+                {id:'ai-memory',    label:'AI Memory',         emoji:'🧠', cat:'AI Infrastructure',  desc:'Persistent memory, knowledge graphs'},
+                {id:'mcp-tools',    label:'MCP & Tools',       emoji:'🔧', cat:'AI Infrastructure',  desc:'MCP servers, tool use, function calling'},
                 // Developer Tools
-                {id:'ai-code',      label:'AI Coding',       emoji:'💻', cat:'Developer Tools',   desc:'Code assistants, copilots, code gen'},
-                {id:'dev-ops-ai',   label:'AI DevOps',       emoji:'🚀', cat:'Developer Tools',   desc:'CI/CD automation, infra intelligence'},
-                {id:'observability',label:'Observability',   emoji:'📊', cat:'Developer Tools',   desc:'LLM monitoring, eval, guardrails'},
+                {id:'ai-code',      label:'AI Coding',         emoji:'💻', cat:'Developer Tools',    desc:'Code assistants, copilots, code gen'},
+                {id:'dev-ops-ai',   label:'AI DevOps',         emoji:'🚀', cat:'Developer Tools',    desc:'CI/CD automation, infra intelligence'},
+                {id:'observability',label:'Observability',     emoji:'📊', cat:'Developer Tools',    desc:'LLM monitoring, eval, guardrails'},
+                {id:'ai-testing',   label:'AI Testing',        emoji:'🧪', cat:'Developer Tools',    desc:'Automated QA, test generation'},
                 // Applied AI
-                {id:'ai-data',      label:'AI + Data',       emoji:'📈', cat:'Applied AI',        desc:'AI analytics, ML data pipelines'},
-                {id:'ai-workflows', label:'AI Workflows',    emoji:'⚙️', cat:'Applied AI',        desc:'Workflow automation, no-code AI'},
-                {id:'ai-search',    label:'AI Search',       emoji:'🔎', cat:'Applied AI',        desc:'Enterprise search, knowledge bases'},
-                {id:'voice-ai',     label:'Voice AI',        emoji:'🎙️', cat:'Applied AI',        desc:'Speech, TTS, conversational AI'},
-                // Verticals
-                {id:'ai-security',  label:'AI Security',     emoji:'🔐', cat:'Verticals',         desc:'Threat detection, compliance AI'},
-                {id:'ai-finance',   label:'AI Finance',      emoji:'💰', cat:'Verticals',         desc:'Fintech AI, trading, fraud detection'},
-                {id:'ai-health',    label:'AI Healthcare',   emoji:'🏥', cat:'Verticals',         desc:'Medical AI, clinical decision support'},
+                {id:'ai-data',      label:'AI + Data',         emoji:'📈', cat:'Applied AI',         desc:'AI analytics, ML data pipelines'},
+                {id:'ai-workflows', label:'AI Workflows',      emoji:'⚙️', cat:'Applied AI',         desc:'Workflow automation, no-code AI'},
+                {id:'ai-search',    label:'AI Search',         emoji:'🔎', cat:'Applied AI',         desc:'Enterprise search, knowledge bases'},
+                {id:'voice-ai',     label:'Voice AI',          emoji:'🎙️', cat:'Applied AI',         desc:'Speech, TTS, conversational agents'},
+                {id:'ai-robotics',  label:'AI Robotics',       emoji:'🦾', cat:'Applied AI',         desc:'Robotics software, embodied AI'},
+                // Fintech
+                {id:'fintech-ai',   label:'AI Fintech',        emoji:'💳', cat:'Fintech',            desc:'AI for banking, payments, lending'},
+                {id:'trading-ai',   label:'Trading & Quant',   emoji:'📉', cat:'Fintech',            desc:'Algorithmic trading, quant finance AI'},
+                {id:'fraud-compliance',label:'Fraud & Compliance',emoji:'🛡️',cat:'Fintech',          desc:'Fraud detection, AML, KYC, compliance'},
+                {id:'insurance-ai', label:'Insurtech AI',      emoji:'📋', cat:'Fintech',            desc:'Underwriting automation, claims AI'},
+                // Crypto & Web3
+                {id:'crypto-ai',    label:'Crypto × AI',      emoji:'🔗', cat:'Crypto & Web3',      desc:'AI agents on-chain, blockchain intelligence'},
+                {id:'defi',         label:'DeFi & Protocol',   emoji:'⛓️', cat:'Crypto & Web3',      desc:'DeFi protocols, DEX, stablecoins'},
+                {id:'web3-infra',   label:'Web3 Infrastructure',emoji:'🌐',cat:'Crypto & Web3',      desc:'Blockchain infra, node services, wallets'},
+                // eCommerce
+                {id:'ecomm-ai',     label:'eCommerce AI',      emoji:'🛍️', cat:'eCommerce',          desc:'AI for retail, recommendations'},
+                {id:'supply-chain-ai',label:'Supply Chain AI', emoji:'📦', cat:'eCommerce',          desc:'Logistics AI, inventory forecasting'},
+                // Healthcare
+                {id:'ai-health',    label:'AI Healthcare',     emoji:'🏥', cat:'Healthcare',         desc:'Medical AI, clinical decision support'},
+                {id:'biotech-ai',   label:'BioTech AI',        emoji:'🧬', cat:'Healthcare',         desc:'Drug discovery, genomics, protein AI'},
+                {id:'mental-health-ai',label:'Mental Health AI',emoji:'💚',cat:'Healthcare',         desc:'AI therapy tools, wellness platforms'},
+                // Enterprise SaaS
+                {id:'sales-ai',     label:'Sales AI',          emoji:'💬', cat:'Enterprise SaaS',    desc:'Sales automation, CRM intelligence'},
+                {id:'hr-ai',        label:'HR & Recruiting AI',emoji:'👥', cat:'Enterprise SaaS',    desc:'AI recruiting, talent intelligence'},
+                {id:'legal-ai',     label:'Legal AI',          emoji:'⚖️', cat:'Enterprise SaaS',    desc:'Contract analysis, legal research'},
+                {id:'marketing-ai', label:'Marketing AI',      emoji:'📣', cat:'Enterprise SaaS',    desc:'AI content, ad optimization, growth'},
+                {id:'customer-support-ai',label:'Support AI',  emoji:'🎧', cat:'Enterprise SaaS',    desc:'AI customer service, helpdesk automation'},
+                // Security
+                {id:'ai-security',  label:'AI Security',       emoji:'🔐', cat:'Security',           desc:'Threat detection, SOC automation'},
+                {id:'privacy-ai',   label:'Privacy AI',        emoji:'🔒', cat:'Security',           desc:'Privacy-preserving AI, synthetic data'},
+                // Education
+                {id:'edtech-ai',    label:'EdTech AI',         emoji:'📚', cat:'Education',          desc:'AI tutoring, personalized learning'},
               ]
-              const cats = Array.from(new Set(TOPIC_DEFS.map((t:any)=>t.cat)))
+                            const cats = Array.from(new Set(TOPIC_DEFS.map((t:any)=>t.cat)))
               const toggleTopic = (id:string) => {
                 setActiveTopics(prev=>{
                   const next=new Set(prev)
@@ -1511,17 +1536,17 @@ export default function App(){
                   {!discovering&&discovered.length===0&&(
                     <div className="empty">
                       <div className="empty-ico">
-                        {scrapeSource==='github'?'⚡':scrapeSource==='producthunt'?'🚀':scrapeSource==='hackernews'?'🗞':'💼'}
+                        {scrapeSource==='github'?'⚡':scrapeSource==='yc'?'🚀':scrapeSource==='hackernews'?'🗞':'💼'}
                       </div>
                       <div className="empty-t">
                         {scrapeSource==='github'&&'Click Discover to find AI orgs on GitHub'}
-                        {scrapeSource==='producthunt'&&'Click Discover to pull recent AI launches from Product Hunt'}
+                        {scrapeSource==='yc'&&'YC-backed startups · recent batches W25/S24/W23 · Show HN launches'}
                         {scrapeSource==='hackernews'&&"Click Discover to scan HN Who's Hiring threads"}
                         {scrapeSource==='linkedin'&&'Click Discover to search LinkedIn companies via Proxycurl'}
                       </div>
                       <div className="empty-s">
                         {scrapeSource==='github'&&'15 rotating search queries · deduped vs your CRM · enriches org members + emails'}
-                        {scrapeSource==='producthunt'&&'No auth needed · pulls from RSS · filters for AI/ML/dev tools'}
+                        {scrapeSource==='yc'&&'YC Companies API + HN Algolia · no auth needed · perfectly targeted ICP'}
                         {scrapeSource==='hackernews'&&'Parses latest hiring posts · extracts company + website · filters for AI signal'}
                         {scrapeSource==='linkedin'&&'Requires PROXYCURL_API_KEY · 10 free credits on signup · $0.01/lookup'}
                       </div>
@@ -1532,7 +1557,7 @@ export default function App(){
                       {filtered.map((org:any)=>{
                         const st=scrSt[org.org]||'idle', d=scraped[org.org]
                         const score=d?.leadScore||org.score||0
-                        const srcIcon=org.source==='producthunt'?'🚀':org.source==='hackernews'?'🗞':org.source==='linkedin'?'💼':'⚡'
+                        const srcIcon=org.source==='yc'?'🏆':org.source==='showhn'?'🗞':org.source==='hackernews'?'🗞':org.source==='linkedin'?'💼':'⚡'
                         return(
                           <div key={org.org}
                             className={`scard ${st==='done'?'done':st==='running'?'running':st==='fail'?'fail':''}`}
@@ -1544,7 +1569,8 @@ export default function App(){
                             <div className="stype">{org.tagline||org.type}</div>
                             {/* Source-specific signals */}
                             {org.source==='github'&&<div className="sstar">⭐ {(org.stars||0).toLocaleString()}</div>}
-                            {org.source==='producthunt'&&org.votes>0&&<div className="sstar">▲ {org.votes} upvotes</div>}
+                            {org.source==='yc'&&org.batch&&<div className="sstar" style={{color:'#f97316'}}>YC {org.batch}{org.teamSize>0?` · ${org.teamSize} team`:''}</div>}
+                            {org.source==='showhn'&&<div className="sstar" style={{color:'var(--yellow)'}}>🗞 Show HN</div>}
                             {org.source==='hackernews'&&<div className="sstar" style={{color:'var(--yellow)'}}>🗞 HN Hiring</div>}
                             {org.source==='linkedin'&&org.followers>0&&<div className="sstar">👥 {org.followers.toLocaleString()} followers</div>}
                             {/* Score badge */}
