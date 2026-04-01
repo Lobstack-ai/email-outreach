@@ -1,23 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-
-// Broad, varied queries to surface fresh leads each run
-const SEARCH_QUERIES = [
-  'ai+agent+framework+stars:>50',
-  'llm+agent+platform+stars:>30',
-  'autonomous+agents+production+stars:>20',
-  'mcp+tools+server+stars:>10',
-  'anthropic+claude+sdk+stars:>20',
-  'openai+agent+deploy+stars:>50',
-  'langchain+rag+stars:>100',
-  'ai+workflow+automation+stars:>50',
-  'llm+inference+serving+stars:>50',
-  'vector+database+embeddings+stars:>100',
-  'ai+code+assistant+stars:>50',
-  'multi+agent+orchestration+stars:>20',
-  'ai+memory+persistence+stars:>10',
-  'generative+ai+platform+stars:>50',
-  'llmops+monitoring+stars:>20',
-]
+import { buildGitHubQueries } from '@/lib/topics'
 
 const SKIP = new Set([
   'microsoft','google','facebook','meta','amazon','aws','apple',
@@ -35,18 +17,19 @@ function classifyOrg(topics: string[], repos: string[]): string {
   return 'AI/ML Startup'
 }
 
-async function ghSearch(q: string, token?: string): Promise<any[]> {
-  const headers: Record<string, string> = { Accept: 'application/vnd.github+json' }
-  if (token) headers.Authorization = `Bearer ${token}`
-  const r = await fetch(
-    `https://api.github.com/search/repositories?q=${q}&sort=updated&per_page=30`,
-    { headers }  // NO cache — always fresh results
-  )
-  if (!r.ok) {
-    console.error(`GitHub search failed for query "${q}": ${r.status}`)
-    return []
+async function ghSearch(query: string, token?: string): Promise<any[]> {
+  const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=30`
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'LobstackOutreach/1.0',
   }
-  return (await r.json()).items || []
+  if (token) headers['Authorization'] = `token ${token}`
+  try {
+    const r = await fetch(url, { headers, next: { revalidate: 0 } })
+    if (!r.ok) return []
+    const d = await r.json()
+    return d.items || []
+  } catch { return [] }
 }
 
 export async function GET(req: NextRequest) {
@@ -54,6 +37,10 @@ export async function GET(req: NextRequest) {
   const token    = process.env.GITHUB_TOKEN  // always use server token
   const existing = (sp.get('existing') || '').toLowerCase().split(',').filter(Boolean)
   const limit    = parseInt(sp.get('limit') || '60')
+  // Accept topic IDs to drive which queries run
+  const topicsParam = sp.get('topics') || ''
+  const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
+  const SEARCH_QUERIES = buildGitHubQueries(topicIds)
   const nQueries = Math.min(parseInt(sp.get('queries') || '8'), SEARCH_QUERIES.length)
 
   const existingSet = new Set(existing)

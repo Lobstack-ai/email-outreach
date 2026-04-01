@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { buildPHTopics } from '@/lib/topics'
 
 const SKIP = new Set([
   'openai','anthropic','google','microsoft','meta','amazon','apple',
@@ -86,7 +87,9 @@ export async function GET(req: NextRequest) {
       }
     } catch {}
 
-    const topics = ['artificial-intelligence', 'developer-tools', 'machine-learning', 'bots']
+    const topicsParam = new URL(req.url).searchParams.get('topics') || ''
+    const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
+    const topics      = buildPHTopics(topicIds)
     const seen   = new Set<string>()
     const orgs: any[] = []
 

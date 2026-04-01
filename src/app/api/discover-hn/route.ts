@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { buildHNKeywords } from '@/lib/topics'
 
 // HN Algolia API — fully public, no auth
 const HN_SEARCH = 'https://hn.algolia.com/api/v1'
@@ -34,9 +35,9 @@ function extractWebsite(text: string): string {
   return urlMatch
 }
 
-function isAICompany(text: string): boolean {
+function isAICompany(text: string, keywords: string[]): boolean {
   const lower = text.toLowerCase()
-  return AI_KEYWORDS.some(kw => lower.includes(kw))
+  return keywords.some(kw => lower.includes(kw))
 }
 
 function scoreHNPost(post: any, text: string): number {
@@ -79,7 +80,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, orgs: [], total: 0, note: 'No HN hiring threads found' })
     }
 
-    const seen   = new Set<string>()
+    const topicsParam = new URL(req.url).searchParams.get('topics') || ''
+    const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
+    const hnKeywords  = buildHNKeywords(topicIds)
+    const seen        = new Set<string>()
     const orgs: any[] = []
 
     for (const thread of threads) {
@@ -96,7 +100,7 @@ export async function GET(req: NextRequest) {
         if (!text || text.length < 50) continue
 
         // Only AI companies
-        if (!isAICompany(text)) continue
+        if (!isAICompany(text, hnKeywords)) continue
 
         const company = extractCompanyFromPost(text)
         if (!company || company.length < 2) continue
@@ -110,6 +114,7 @@ export async function GET(req: NextRequest) {
 
         const website = extractWebsite(text)
         const score   = scoreHNPost(comment, text)
+        const aiScore2 = hnKeywords.filter(kw => text.toLowerCase().includes(kw)).length
 
         orgs.push({
           source:      'hackernews',

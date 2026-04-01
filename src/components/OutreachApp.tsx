@@ -402,6 +402,11 @@ export default function App(){
   const[filterMinScore,setFilterMinScore]=useState(0)
   const[filterSortBy,setFilterSortBy]=useState<'stars'|'forks'|'members'|'score'|'watchers'>('score')
   const[filterShowHasEmail,setFilterShowHasEmail]=useState(false)
+  // Topic/niche filter — drives what gets discovered AND filters results
+  const[activeTopics,setActiveTopics]=useState<Set<string>>(new Set(['ai-agents','llm-infra','dev-tools']))
+  const[activeCompanyTypes,setActiveCompanyTypes]=useState<Set<string>>(new Set())
+  const[activeCompanySizes,setActiveCompanySizes]=useState<Set<string>>(new Set())
+  const[showTopicPanel,setShowTopicPanel]=useState(false)
   const[log,setLog]=useState<Log[]>([])
   const logRef=useRef<HTMLDivElement>(null)
   const{ts,toast}=useToast()
@@ -457,20 +462,24 @@ export default function App(){
           return m?m[1].toLowerCase():''
         }).filter(Boolean)
         addLog(`  Excluding ${existingSlugs.length} orgs already in CRM`, 'i')
-        const r = await fetch(`/api/discover?queries=8&limit=60&existing=${existingSlugs.join(',')}`).then(r=>r.json())
+        const topicsQ = activeTopics.size ? `&topics=${Array.from(activeTopics).join(',')}` : ''
+        const r = await fetch(`/api/discover?queries=8&limit=60&existing=${existingSlugs.join(',')}${topicsQ}`).then(r=>r.json())
         if (!r.ok) throw new Error(r.error)
         orgs = r.orgs
         if (r.queriesUsed?.length) addLog(`  Queries: ${r.queriesUsed.slice(0,3).join(' · ')}...`, 'i')
       } else if (scrapeSource === 'producthunt') {
-        const r = await fetch('/api/discover-ph').then(r=>r.json())
+        const topicsQ = activeTopics.size ? `?topics=${Array.from(activeTopics).join(',')}` : ''
+        const r = await fetch(`/api/discover-ph${topicsQ}`).then(r=>r.json())
         if (!r.ok) throw new Error(r.error||'Product Hunt discovery failed')
         orgs = r.orgs
       } else if (scrapeSource === 'hackernews') {
-        const r = await fetch('/api/discover-hn').then(r=>r.json())
+        const topicsQ = activeTopics.size ? `?topics=${Array.from(activeTopics).join(',')}` : ''
+        const r = await fetch(`/api/discover-hn${topicsQ}`).then(r=>r.json())
         if (!r.ok) throw new Error(r.error||'HN discovery failed')
         orgs = r.orgs
       } else if (scrapeSource === 'linkedin') {
-        const r = await fetch('/api/discover-li').then(r=>r.json())
+        const topicsQ = activeTopics.size ? `?topics=${Array.from(activeTopics).join(',')}` : ''
+        const r = await fetch(`/api/discover-li${topicsQ}`).then(r=>r.json())
         if (!r.ok) throw new Error(r.setup||r.error||'LinkedIn discovery failed')
         orgs = r.orgs
       }
@@ -1282,6 +1291,118 @@ export default function App(){
                 </div>
               </div>
             </div>
+
+            {/* TOPIC / NICHE FILTER PANEL */}
+            {(()=>{
+              const TOPIC_DEFS = [
+                // AI Infrastructure
+                {id:'ai-agents',    label:'AI Agents',       emoji:'🤖', cat:'AI Infrastructure', desc:'Agent frameworks, multi-agent, runtimes'},
+                {id:'llm-infra',    label:'LLM Infra',       emoji:'⚡', cat:'AI Infrastructure', desc:'Model serving, inference, LLMOps'},
+                {id:'vector-db',    label:'Vector & RAG',    emoji:'🔍', cat:'AI Infrastructure', desc:'Vector DBs, embeddings, RAG pipelines'},
+                {id:'ai-memory',    label:'AI Memory',       emoji:'🧠', cat:'AI Infrastructure', desc:'Persistent memory, knowledge graphs'},
+                {id:'mcp-tools',    label:'MCP & Tools',     emoji:'🔧', cat:'AI Infrastructure', desc:'MCP servers, tool use, function calling'},
+                // Developer Tools
+                {id:'ai-code',      label:'AI Coding',       emoji:'💻', cat:'Developer Tools',   desc:'Code assistants, copilots, code gen'},
+                {id:'dev-ops-ai',   label:'AI DevOps',       emoji:'🚀', cat:'Developer Tools',   desc:'CI/CD automation, infra intelligence'},
+                {id:'observability',label:'Observability',   emoji:'📊', cat:'Developer Tools',   desc:'LLM monitoring, eval, guardrails'},
+                // Applied AI
+                {id:'ai-data',      label:'AI + Data',       emoji:'📈', cat:'Applied AI',        desc:'AI analytics, ML data pipelines'},
+                {id:'ai-workflows', label:'AI Workflows',    emoji:'⚙️', cat:'Applied AI',        desc:'Workflow automation, no-code AI'},
+                {id:'ai-search',    label:'AI Search',       emoji:'🔎', cat:'Applied AI',        desc:'Enterprise search, knowledge bases'},
+                {id:'voice-ai',     label:'Voice AI',        emoji:'🎙️', cat:'Applied AI',        desc:'Speech, TTS, conversational AI'},
+                // Verticals
+                {id:'ai-security',  label:'AI Security',     emoji:'🔐', cat:'Verticals',         desc:'Threat detection, compliance AI'},
+                {id:'ai-finance',   label:'AI Finance',      emoji:'💰', cat:'Verticals',         desc:'Fintech AI, trading, fraud detection'},
+                {id:'ai-health',    label:'AI Healthcare',   emoji:'🏥', cat:'Verticals',         desc:'Medical AI, clinical decision support'},
+              ]
+              const cats = Array.from(new Set(TOPIC_DEFS.map((t:any)=>t.cat)))
+              const toggleTopic = (id:string) => {
+                setActiveTopics(prev=>{
+                  const next=new Set(prev)
+                  next.has(id)?next.delete(id):next.add(id)
+                  return next
+                })
+              }
+              const selectAll   = () => setActiveTopics(new Set(TOPIC_DEFS.map((t:any)=>t.id)))
+              const clearAll    = () => setActiveTopics(new Set())
+              return(
+                <div className="card" style={{padding:'14px 20px',marginBottom:12}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                      <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px'}}>Topics & Niches</span>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,padding:'2px 8px',borderRadius:10,
+                        background:activeTopics.size>0?'var(--red2)':'var(--b2)',color:activeTopics.size>0?'#fff':'var(--ink4)',fontWeight:600}}>
+                        {activeTopics.size===0?'All':''+activeTopics.size} selected
+                      </span>
+                      <span style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink4)'}}>
+                        {activeTopics.size===0?'Discovering across all topics':
+                         `Focused on ${activeTopics.size} topic${activeTopics.size===1?'':'s'} — drives what gets discovered`}
+                      </span>
+                    </div>
+                    <div style={{display:'flex',gap:6}}>
+                      <button className="btn btn-ghost btn-xs" onClick={()=>setShowTopicPanel(p=>!p)}>
+                        {showTopicPanel?'▲ Collapse':'▼ Expand topics'}
+                      </button>
+                      {activeTopics.size>0&&<button className="btn btn-ghost btn-xs" onClick={clearAll}>✕ Clear all</button>}
+                      {activeTopics.size<TOPIC_DEFS.length&&<button className="btn btn-ghost btn-xs" onClick={selectAll}>Select all</button>}
+                    </div>
+                  </div>
+
+                  {/* Selected topic chips — always visible */}
+                  {activeTopics.size>0&&!showTopicPanel&&(
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                      {TOPIC_DEFS.filter(t=>activeTopics.has(t.id)).map(t=>(
+                        <span key={t.id}
+                          onClick={()=>toggleTopic(t.id)}
+                          style={{display:'flex',alignItems:'center',gap:4,fontFamily:'var(--mono)',fontSize:10,
+                            padding:'3px 10px',borderRadius:20,cursor:'pointer',
+                            background:'var(--red2)',color:'#fff',fontWeight:600}}>
+                          {t.emoji} {t.label} <span style={{opacity:.7,marginLeft:2}}>✕</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Full topic grid — expanded */}
+                  {showTopicPanel&&(
+                    <div>
+                      {cats.map(cat=>(
+                        <div key={cat} style={{marginBottom:14}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',
+                            letterSpacing:'1px',marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+                            {cat}
+                          </div>
+                          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                            {TOPIC_DEFS.filter(t=>t.cat===cat).map(t=>{
+                              const active=activeTopics.has(t.id)
+                              return(
+                                <button key={t.id} onClick={()=>toggleTopic(t.id)}
+                                  title={t.desc}
+                                  style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',
+                                    borderRadius:20,border:`1.5px solid ${active?'var(--red2)':'var(--b)'}`,
+                                    background:active?'var(--red2)':'var(--s2)',
+                                    color:active?'#fff':'var(--ink)',
+                                    fontFamily:'var(--mono)',fontSize:10,fontWeight:active?700:400,
+                                    cursor:'pointer',transition:'all .12s',whiteSpace:'nowrap'}}>
+                                  <span>{t.emoji}</span>
+                                  <span>{t.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{marginTop:8,padding:'8px 12px',background:'var(--s2)',borderRadius:'var(--r)',
+                        fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
+                        💡 Topics control which GitHub queries run, which Product Hunt topics are scanned,
+                        which HN keywords match, and which LinkedIn searches fire.
+                        Select none to search everything.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* FILTER BAR */}
             <div className="card" style={{padding:'14px 20px',marginBottom:12,background:'var(--s2)'}}>

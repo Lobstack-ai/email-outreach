@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { buildLIKeywords } from '@/lib/topics'
 
 // LinkedIn lead gen via Proxycurl API
 // https://nubela.co/proxycurl — $0.01/profile, 10 free credits on signup
@@ -104,12 +105,9 @@ export async function GET(req: NextRequest) {
     } catch {}
 
     // Search for AI companies on LinkedIn
-    const searches = [
-      'AI agent platform startup',
-      'LLM infrastructure startup',
-      'AI developer tools',
-      'machine learning platform',
-    ]
+    const topicsParam = new URL(req.url).searchParams.get('topics') || ''
+    const topicIds    = topicsParam ? topicsParam.split(',').filter(Boolean) : []
+    const searches    = buildLIKeywords(topicIds)
 
     const seen  = new Set<string>()
     const orgs: any[] = []
