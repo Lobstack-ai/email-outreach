@@ -1154,7 +1154,7 @@ export default function App(){
           {tab==='scrape'&&<>
             <div className="ph">
               <div className="ph-t">Lead Discovery</div>
-              <div className="ph-s">Multi-source lead gen · GitHub · Product Hunt · Hacker News · LinkedIn · same enrich → generate → send flow</div>
+              <div className="ph-s">Multi-source lead gen · GitHub · YC Companies · Hacker News · LinkedIn · same enrich → generate → send flow</div>
             </div>
 
             {/* SOURCE SELECTOR */}
@@ -1351,7 +1351,7 @@ export default function App(){
                       ))}
                       <div style={{marginTop:8,padding:'8px 12px',background:'var(--s2)',borderRadius:'var(--r)',
                         fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
-                        💡 Topics control which GitHub queries run, which Product Hunt topics are scanned,
+                        💡 Topics control which GitHub queries run, which YC company tags are searched,
                         which HN keywords match, and which LinkedIn searches fire.
                         Select none to search everything.
                       </div>
