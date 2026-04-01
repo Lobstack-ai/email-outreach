@@ -4,25 +4,49 @@ const BASE  = 'appnF2fNAyEYnscvo'
 const TABLE = 'tblMgthKziXfnIPBV'
 const AT    = () => process.env.AIRTABLE_API_KEY!
 
-function esc(v: string) {
+// Professional CSV escaping
+function cell(v: any): string {
+  if (v === null || v === undefined || v === '') return ''
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
+  if (typeof v === 'object' && 'name' in v) return csvStr(v.name)
+  return csvStr(String(v))
+}
+function csvStr(s: string): string {
+  if (!s) return ''
+  // Always quote if contains comma, quote, newline, or leading/trailing space
+  const needsQuote = /[",\n\r]/.test(s) || s !== s.trim()
+  const escaped    = s.replace(/"/g, '""')
+  return needsQuote ? `"${escaped}"` : escaped
+}
+
+function formatDate(d: string): string {
+  if (!d) return ''
+  try {
+    return new Date(d).toLocaleDateString('en-US', {year:'numeric',month:'short',day:'numeric'})
+  } catch { return d }
+}
+
+function yesNo(v: any): string {
   if (!v) return ''
-  const s = String(v).replace(/"/g, '""')
-  return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s
+  return v === true || v === 1 ? 'Yes' : ''
 }
 
 export async function GET(req: NextRequest) {
   const sp     = new URL(req.url).searchParams
-  const filter = sp.get('filter') || 'all'  // all | sent | replied | new | noemail
+  const filter = sp.get('filter') || 'all'
 
   try {
-    // Load all records
+    // Load all records with pagination
     let records: any[] = []
     let offset: string | undefined
+
     do {
-      const qs = offset ? `pageSize=100&offset=${offset}` : 'pageSize=100'
-      const r  = await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}?${qs}`, {
+      const params = new URLSearchParams({ pageSize: '100' })
+      if (offset) params.set('offset', offset)
+      const r = await fetch(`https://api.airtable.com/v0/${BASE}/${TABLE}?${params}`, {
         headers: { Authorization: `Bearer ${AT()}` },
       })
+      if (!r.ok) throw new Error(`Airtable ${r.status}`)
       const d = await r.json()
       records.push(...(d.records || []))
       offset = d.offset
@@ -32,38 +56,87 @@ export async function GET(req: NextRequest) {
     if (filter !== 'all') {
       records = records.filter(r => {
         const f    = r.fields
-        const stat = f['Status'] || ''
-        const seq  = f['Sequence Status'] || ''
-        if (filter === 'sent')    return stat === 'Email Sent'
-        if (filter === 'replied') return stat === 'Replied'
-        if (filter === 'new')     return stat === 'New'
-        if (filter === 'noemail') return !f['Contact Email']
-        return true
+        const stat = typeof f['Status'] === 'object' ? f['Status']?.name : f['Status'] || ''
+        const seq  = typeof f['Sequence Status'] === 'object' ? f['Sequence Status']?.name : f['Sequence Status'] || ''
+        switch (filter) {
+          case 'sent':         return stat === 'Email Sent'
+          case 'replied':      return stat === 'Replied'
+          case 'new':          return stat === 'New'
+          case 'noemail':      return !f['Contact Email']
+          case 'interested':   return (typeof f['Reply Intent']==='object'?f['Reply Intent']?.name:f['Reply Intent']) === 'interested'
+          case 'bounced':      return !!f['Bounced']
+          case 'disqualified': return !!f['Disqualified']
+          default:             return true
+        }
       })
     }
 
-    // Build CSV
-    const COLS = [
-      'Company', 'Contact Name', 'Contact Email', 'Job Title', 'Company Type',
-      'Status', 'Sequence Status', 'Reply Intent', 'Open Count', 'Last Opened',
-      'Lead Score', 'GitHub Stars', 'Org Members', 'GitHub Org URL', 'Website',
-      'Email Subject', 'Last Contacted', 'Date Added', 'Source', 'Bounced', 'Disqualified',
-    ]
-
-    const header = COLS.map(esc).join(',')
-    const rows   = records.map(r => {
-      const f = r.fields
-      return COLS.map(col => {
-        const v = f[col]
-        if (v === null || v === undefined) return ''
-        if (typeof v === 'object' && 'name' in v) return esc(v.name) // singleSelect
-        if (typeof v === 'boolean') return v ? '1' : '0'
-        return esc(String(v))
-      }).join(',')
+    // Sort: sent leads first (most interesting), then by lead score desc
+    records.sort((a, b) => {
+      const aStatus = a.fields['Status']?.name || a.fields['Status'] || ''
+      const bStatus = b.fields['Status']?.name || b.fields['Status'] || ''
+      const statusPriority = (s: string) =>
+        s === 'Booked Call' ? 0 : s === 'Replied' ? 1 : s === 'Email Sent' ? 2 : 3
+      const sp = statusPriority(aStatus) - statusPriority(bStatus)
+      if (sp !== 0) return sp
+      return (b.fields['Lead Score'] || 0) - (a.fields['Lead Score'] || 0)
     })
 
-    const csv      = [header, ...rows].join('\n')
-    const filename = `lobstack-leads-${filter}-${new Date().toISOString().split('T')[0]}.csv`
+    // ── CSV COLUMNS — clean, professional, business-ready ──────────────
+    const SECTIONS = [
+      // Company
+      { header: 'Company',          fn: (f: any) => cell(f['Company']) },
+      { header: 'Company Type',     fn: (f: any) => cell(f['Company Type']) },
+      { header: 'Website',          fn: (f: any) => cell(f['Website']) },
+      { header: 'GitHub Org',       fn: (f: any) => cell(f['GitHub Org URL']) },
+      { header: 'Lead Score',       fn: (f: any) => cell(f['Lead Score']) },
+      { header: 'Source',           fn: (f: any) => cell(f['Source']) },
+      { header: 'Date Added',       fn: (f: any) => formatDate(f['Date Added']) },
+      // Contact
+      { header: 'Contact Name',     fn: (f: any) => cell(f['Contact Name']) },
+      { header: 'Contact Email',    fn: (f: any) => cell(f['Contact Email']) },
+      { header: 'Job Title',        fn: (f: any) => cell(f['Job Title']) },
+      { header: 'Email Confidence', fn: (f: any) => cell(f['Email Confidence']) },
+      // Outreach status
+      { header: 'Status',           fn: (f: any) => cell(f['Status']) },
+      { header: 'Sequence Status',  fn: (f: any) => cell(f['Sequence Status']) },
+      { header: 'Last Contacted',   fn: (f: any) => formatDate(f['Last Contacted']) },
+      { header: 'Follow Up #',      fn: (f: any) => cell(f['Follow Up #']) },
+      // Engagement
+      { header: 'Opens',            fn: (f: any) => cell(f['Open Count']) },
+      { header: 'Last Opened',      fn: (f: any) => formatDate(f['Last Opened']) },
+      { header: 'Reply Intent',     fn: (f: any) => cell(f['Reply Intent']) },
+      { header: 'Reply Sent',       fn: (f: any) => yesNo(f['Reply Sent']) },
+      // Flags
+      { header: 'Bounced',          fn: (f: any) => yesNo(f['Bounced']) },
+      { header: 'Disqualified',     fn: (f: any) => yesNo(f['Disqualified']) },
+      // GitHub signals
+      { header: 'GitHub Stars',     fn: (f: any) => cell(f['GitHub Stars']) },
+      { header: 'GitHub Forks',     fn: (f: any) => cell(f['GitHub Forks']) },
+      { header: 'Org Members',      fn: (f: any) => cell(f['Org Members']) },
+      { header: 'Top Repos',        fn: (f: any) => cell(f['Top Repos']) },
+    ]
+
+    // Build CSV
+    const header = SECTIONS.map(c => csvStr(c.header)).join(',')
+    const rows   = records.map(r => {
+      const f = r.fields
+      return SECTIONS.map(c => c.fn(f)).join(',')
+    })
+
+    const today    = new Date().toISOString().split('T')[0]
+    const label    = filter === 'all' ? 'all-leads' : filter
+    const filename = `lobstack-outreach-${label}-${today}.csv`
+
+    // Professional header: metadata comment rows (ignored by Excel/Sheets, useful for humans)
+    const meta = [
+      `# Lobstack Outreach Export`,
+      `# Generated: ${new Date().toLocaleString('en-US', {dateStyle:'long',timeStyle:'short'})}`,
+      `# Filter: ${filter} · Total records: ${records.length}`,
+      `# `,
+    ].join('\n')
+
+    const csv = meta + '\n' + header + '\n' + rows.join('\n')
 
     return new NextResponse(csv, {
       status: 200,

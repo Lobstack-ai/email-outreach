@@ -533,7 +533,8 @@ export default function App(){
     const targets = searchMode === 'discover' && discovered.length > 0
       ? discovered.map(o => ({ org: o.org, name: o.name, type: o.type, website: o.website }))
       : TARGETS
-    addLog(`=== Scraping ${targets.length} orgs ===`, 'i')
+    const srcLabel = scrapeSource==='github'?'GitHub':scrapeSource==='yc'?'YC/ShowHN':scrapeSource==='hackernews'?'HN':'LinkedIn'
+    addLog(`=== Enriching ${targets.length} leads from ${srcLabel} ===`, 'i')
     const rl = await fetch('/api/scrape?org=ratelimit').then(r=>r.json()).catch(()=>null)
     if (rl?.ok) addLog(`GitHub: ${rl.remaining}/${rl.limit} req remaining`, rl.remaining<40?'w':'i')
     for (const tgt of targets) {
@@ -569,7 +570,7 @@ export default function App(){
           "AI Tools Used":    d.aiTools,
           "Status":           'New',
           "Sequence Status":  'Cold',
-          "Source":           'GitHub Scrape',
+          "Source":           scrapeSource==='github'?'GitHub':scrapeSource==='yc'?'YC Companies':scrapeSource==='hackernews'?'Hacker News':'LinkedIn',
           "Date Added":       new Date().toISOString().split('T')[0],
           "Personalization Notes": d.description||'',
         }
@@ -1450,7 +1451,12 @@ export default function App(){
                   </div>
                   {discovering&&(
                     <div style={{padding:'40px 0',textAlign:'center',color:'var(--ink3)',fontFamily:'var(--mono)',fontSize:12}}>
-                      <div style={{marginBottom:12}}>Searching GitHub across 6 queries...</div>
+                      <div style={{marginBottom:12}}>
+                        {scrapeSource==='github'&&'Searching GitHub across up to 15 queries...'}
+                        {scrapeSource==='yc'&&'Searching YC Companies + Show HN...'}
+                        {scrapeSource==='hackernews'&&"Scanning Hacker News Who's Hiring threads..."}
+                        {scrapeSource==='linkedin'&&'Searching LinkedIn via Proxycurl...'}
+                      </div>
                     </div>
                   )}
                   {!discovering&&discovered.length===0&&(
