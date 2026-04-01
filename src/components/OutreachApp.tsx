@@ -2600,7 +2600,7 @@ export default function App(){
                 </div>
 
                 {/* ICP Breakdown bento */}
-                <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10}}>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10,minWidth:0}}>
                   {[
                     {lbl:'High-Fit',    sub:'Score 61+',        n:leads.filter(l=>l.leadScore>60&&l.contactEmail&&!l.disqualified).length,   c:'#16a34a',action:'Prioritise first'},
                     {lbl:'Mid-Fit',     sub:'Score 21–60',      n:leads.filter(l=>l.leadScore>20&&l.leadScore<=60&&l.contactEmail&&!l.disqualified).length, c:'#d97706',action:'Bulk sequence'},
