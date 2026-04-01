@@ -343,6 +343,25 @@ tbody tr.sel td{background:#E8414206}
 /* MISC */
 hr{border:none;border-top:1px solid var(--b);margin:20px 0}
 .stitle{font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:var(--ink3);margin-bottom:12px}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.bar-grow{transform-origin:left;animation:barGrow .6s cubic-bezier(.16,1,.3,1) both}
+.fade-up{animation:fadeUp .4s ease both}
+.count-up{animation:countUp .5s cubic-bezier(.16,1,.3,1) both}
+/* Bento grid */
+.bento{display:grid;gap:12px}
+.bento-2{grid-template-columns:1fr 1fr}
+.bento-3{grid-template-columns:1fr 1fr 1fr}
+.bento-4{grid-template-columns:repeat(4,1fr)}
+.bento-hero{grid-column:1/-1}
+.bento-wide{grid-column:span 2}
+.bcell{background:var(--s1);border:1px solid var(--b);border-radius:var(--r2);padding:20px;box-shadow:var(--sh);transition:box-shadow .15s}
+.bcell:hover{box-shadow:var(--sh2)}
+.bcell-dark{background:var(--dark);border-color:var(--b)}
+.bcell-accent{background:linear-gradient(135deg,#E8414208 0%,#E8414202 100%);border-color:#E8414220}
 .muted{color:var(--ink3)}
 code{background:var(--dark);color:#e2e8f0;padding:2px 7px;border-radius:4px;font-size:11px;font-family:var(--mono)}
 .flex{display:flex}.gap8{gap:8px}.gap12{gap:12px}
@@ -884,57 +903,150 @@ export default function App(){
           {tab==='mission'&&<>
             <div className="ph">
               <div className="ph-t">Mission Control</div>
-              <div className="ph-s">Live system health, campaign pipeline, and quick actions</div>
+              <div className="ph-s">Live system health · {stats.total} leads · {stats.sent} sent · {stats.replied} replied</div>
             </div>
 
-            <div className="stitle">System Health</div>
-            <div className="hgrid">
+            {/* ── BENTO ROW 1: Today's Queue hero + Warmup ── */}
+            {(()=>{
+              const today       = new Date().toISOString().split('T')[0]
+              const WARMUP_LIMS = [10,20,35,50,75,100]
+              const days        = Math.floor((Date.now()-new Date('2026-03-28').getTime())/86400000)
+              const weekNum     = Math.max(1,Math.min(6,Math.ceil((days+1)/7)))
+              const dailyMax    = WARMUP_LIMS[weekNum-1]
+              const sentToday   = leads.filter(l=>l.status==='Email Sent'&&l.lastContacted===today).length
+              const budget      = Math.max(0,dailyMax-sentToday)
+              const fu1Due      = leads.filter(l=>{
+                if(l.sequenceStatus!=='Email 1 Sent'||!l.followUp1Body) return false
+                const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
+                return d>=5
+              }).length
+              const fu2Due      = leads.filter(l=>{
+                if(l.sequenceStatus!=='Follow-up 1 Sent'||!l.followUp2Body) return false
+                const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
+                return d>=7
+              }).length
+              const needsEmail  = leads.filter(l=>!l.emailBody&&l.contactEmail&&!l.disqualified).length
+              const needsContact= leads.filter(l=>!l.contactEmail&&!l.disqualified).length
+              const budgetPct   = Math.min(100,Math.round(sentToday/dailyMax*100))
+
+              return(
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12,marginBottom:12}}>
+
+                  {/* Today's Queue — wide bento cell */}
+                  <div className="bcell bcell-accent" style={{padding:0,overflow:'hidden'}}>
+                    <div style={{padding:'20px 24px',borderBottom:'1px solid #E8414218'}}>
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+                        <div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:4}}>Today's Queue</div>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:22,letterSpacing:'-.5px',color:'var(--ink)'}}>
+                            {budget===0?'Daily limit reached':budget===1?'1 email left today':`${budget} emails left today`}
+                          </div>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',marginBottom:4}}>Week {weekNum} warmup</div>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:14,color:budget===0?'var(--red)':'var(--green)'}}>{sentToday}/{dailyMax}/day</div>
+                        </div>
+                      </div>
+                      {/* Warmup progress bar */}
+                      <div style={{height:6,background:'var(--b2)',borderRadius:3,overflow:'hidden',marginBottom:12}}>
+                        <div className="bar-grow" style={{height:'100%',width:`${budgetPct}%`,background:budget===0?'#E84142':'#16a34a',borderRadius:3}}/>
+                      </div>
+                    </div>
+                    {/* 4-stat grid */}
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)'}}>
+                      {[
+                        {lbl:'Send Budget',val:budget,sub:`of ${dailyMax} today`,col:budget===0?'var(--red)':budget<5?'var(--yellow)':'var(--green)',act:()=>setTab('send')},
+                        {lbl:'Ready to Send',val:readyCnt,sub:'passed validation',col:readyCnt>0?'var(--ink)':'var(--ink4)',act:()=>setTab('send')},
+                        {lbl:'FU1 Due',val:fu1Due,sub:'5+ days no reply',col:fu1Due>0?'var(--yellow)':'var(--ink4)',act:null},
+                        {lbl:'FU2 Due',val:fu2Due,sub:'7+ days since FU1',col:fu2Due>0?'#d97706':'var(--ink4)',act:null},
+                      ].map(({lbl,val,sub,col,act},i,arr)=>(
+                        <div key={lbl}
+                          onClick={act||undefined}
+                          style={{padding:'16px 20px',borderRight:i<arr.length-1?'1px solid #E8414210':'none',cursor:act?'pointer':'default',transition:'background .1s'}}
+                          onMouseEnter={act?e=>(e.currentTarget.style.background='#E8414208'):undefined}
+                          onMouseLeave={act?e=>(e.currentTarget.style.background=''):undefined}>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:28,letterSpacing:'-1.5px',color:val>0?col:'var(--ink4)',lineHeight:1}}>{val}</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:5}}>{lbl}</div>
+                          <div style={{fontFamily:'var(--body)',fontSize:10,color:'var(--ink4)',marginTop:2}}>{sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Footer bar */}
+                    {(needsEmail>0||needsContact>0)&&(
+                      <div style={{padding:'10px 24px',borderTop:'1px solid #E8414218',display:'flex',gap:20,flexWrap:'wrap',background:'#E8414205'}}>
+                        {needsEmail>0&&<span onClick={()=>setTab('generate')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--yellow)',cursor:'pointer'}}><strong>{needsEmail}</strong> need email written</span>}
+                        {needsContact>0&&<span onClick={()=>setTab('crm')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',cursor:'pointer'}}><strong>{needsContact}</strong> missing contact</span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Warmup week tracker */}
+                  <div className="bcell" style={{display:'flex',flexDirection:'column',gap:12}}>
+                    <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px'}}>Domain Warmup</div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                      {[10,20,35,50,75,100].map((lim,i)=>(
+                        <div key={i} style={{
+                          padding:'8px 6px',borderRadius:'var(--r)',textAlign:'center',
+                          background:i+1<weekNum?'#16a34a18':i+1===weekNum?'#E8414215':'var(--s2)',
+                          border:`1px solid ${i+1<weekNum?'#16a34a30':i+1===weekNum?'var(--red2)':'var(--b)'}`,
+                        }}>
+                          <div style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:i+1<weekNum?'var(--green)':i+1===weekNum?'var(--red2)':'var(--ink4)'}}>{lim}</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:1}}>W{i+1}{i+1===weekNum?' ←':''}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',lineHeight:1.5}}>
+                      Week {weekNum} · {dailyMax}/day · {[90,75,60,45,30,20][weekNum-1]}s cooldown
+                    </div>
+                    <button className="btn btn-ghost btn-sm" onClick={()=>setTab('send')}>Open Send tab →</button>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* ── BENTO ROW 2: Health cards (2×2) + Sequence pipeline ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:12,marginBottom:12}}>
               {[
-                {key:'airtable',ico:'🗄',name:'Airtable CRM',
-                  detail:health?.airtable?.ok?`${health.airtable.leadsCount} leads · ${health.airtable.logsCount} sends logged`:health?.airtable?.error||'Not connected',
-                  tags:health?.airtable?.ok?[{l:'Lobstack CRM',c:'g'},{l:'Read + Write',c:'g'},{l:`${health?.airtable?.leadsCount||0} records`,c:''}]:[{l:'Check AIRTABLE_API_KEY in Vercel',c:'r'}],
-                  h:health?.airtable},
-                {key:'smtp',ico:'✉',name:'PrivateEmail SMTP',
-                  detail:health?.smtp?.ok?`Authenticated · ${health.smtp.email}`:health?.env?.smtpEmail?`Auth failed — ${health.smtp?.error?.slice(0,55)||'check password'}`:'SMTP_EMAIL and SMTP_PASSWORD not configured',
-                  tags:health?.smtp?.ok?[{l:'mail.privateemail.com',c:'g'},{l:'Port 587 STARTTLS',c:'g'},{l:health.smtp.email,c:''}]:[{l:'Set SMTP_EMAIL + SMTP_PASSWORD in Vercel',c:'r'}],
-                  h:health?.smtp},
+                {key:'airtable',ico:'🗄',name:'Airtable',
+                  detail:health?.airtable?.ok?`${health.airtable.leadsCount} leads`:health?.airtable?.error||'Not connected',
+                  ok:health?.airtable?.ok, h:health?.airtable},
+                {key:'smtp',ico:'✉',name:'SMTP',
+                  detail:health?.smtp?.ok?health.smtp.email:health?.env?.smtpEmail?'Auth failed':'Not configured',
+                  ok:health?.smtp?.ok, h:health?.smtp},
                 {key:'github',ico:'⑂',name:'GitHub API',
-                  detail:health?.github?.ok?`${health.github.remaining} of ${health.github.limit} requests/hr remaining`:'Cannot reach GitHub API',
-                  tags:health?.github?[{l:health.github.authenticated?'Token ✓':'No token — 60 req/hr',c:health.github.authenticated?'g':'y'},{l:`${health.github.limit}/hr`,c:health.github.limit===5000?'g':'y'}]:[{l:'Checking...',c:''}],
-                  h:health?.github},
-                {key:'anthropic',ico:'◆',name:'Anthropic API',
-                  detail:health?.env?.anthropic?'API key set — claude-sonnet-4 ready':'ANTHROPIC_API_KEY not set — email generation disabled',
-                  tags:health?.env?.anthropic?[{l:'claude-sonnet-4',c:'g'},{l:'Email generation',c:'g'}]:[{l:'Add ANTHROPIC_API_KEY in Vercel',c:'r'}],
-                  h:health?.anthropic},
-              ].map(({key,ico,name,detail,tags,h})=>{
+                  detail:health?.github?.ok?`${health.github.remaining} req/hr left`:'Unavailable',
+                  ok:health?.github?.ok, h:health?.github},
+                {key:'anthropic',ico:'◆',name:'Anthropic',
+                  detail:health?.env?.anthropic?'claude-sonnet-4 ready':'API key not set',
+                  ok:!!health?.env?.anthropic, h:health?.anthropic},
+              ].map(({key,ico,name,detail,ok,h})=>{
                 const st=hl?'spin':hSt(h)
                 return(
-                  <div key={key} className="hcard">
-                    <div className={`hbar ${st}`}/>
-                    <div className="hcard-top">
-                      <div className="hico">{ico}</div>
-                      <span className={`hbadge ${st}`}>{hl?'Checking':hLbl(h)}</span>
+                  <div key={key} className="bcell" style={{padding:'16px 18px',position:'relative',overflow:'hidden'}}>
+                    <div className={`hbar ${st}`} style={{position:'absolute',top:0,left:0,right:0,height:2}}/>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+                      <span style={{fontSize:18}}>{ico}</span>
+                      <span className={`hbadge ${st}`} style={{fontSize:9,padding:'2px 8px'}}>{hl?'…':hLbl(h)}</span>
                     </div>
-                    <div className="hname">{name}</div>
-                    <div className="hdetail">{detail}</div>
-                    {tags.length>0&&<div className="htags">{tags.map((t,i)=><span key={i} className={`htag ${t.c}`}>{t.l}</span>)}</div>}
+                    <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:4}}>{name}</div>
+                    <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',lineHeight:1.4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'100%'}}>{detail}</div>
                   </div>
                 )
               })}
             </div>
 
-            <div className="stitle">Campaign Pipeline</div>
-            <div className="pipe-wrap">
+            {/* ── BENTO ROW 3: Campaign pipeline (full width) ── */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:0,background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:12,boxShadow:'var(--sh)'}}>
               {[
-                {n:'01',lbl:'Leads Scraped',val:stats.total>0?stats.total:scCnt,tot:TARGETS.length,sub:`of ${TARGETS.length} orgs`,cta:'Go scrape →',t:'scrape'},
-                {n:'02',lbl:'Emails Written',val:stats.hasEmail,tot:Math.max(stats.total,1),sub:`${Math.max(stats.total-stats.hasEmail,0)} remaining`,cta:'Generate →',t:'generate'},
-                {n:'03',lbl:'Contacts Added',val:stats.hasContact,tot:Math.max(stats.total,1),sub:'in Airtable',cta:'Open Airtable →',t:'crm'},
-                {n:'04',lbl:'Emails Sent',val:stats.sent,tot:Math.max(stats.total,1),sub:`${stats.replied} replied · ${stats.booked} booked`,cta:'Launch →',t:'send'},
-              ].map(({n,lbl,val,tot,sub,cta,t})=>{
+                {n:'01',lbl:'Leads Scraped',val:stats.total,tot:Math.max(stats.total,1),sub:`${stats.total} in CRM`,cta:'Discover →',t:'scrape'},
+                {n:'02',lbl:'Sequences Written',val:stats.hasEmail,tot:Math.max(stats.total,1),sub:`${Math.max(stats.total-stats.hasEmail,0)} remaining`,cta:'Generate →',t:'generate'},
+                {n:'03',lbl:'Contacts Found',val:stats.hasContact,tot:Math.max(stats.total,1),sub:'with email addresses',cta:'View CRM →',t:'crm'},
+                {n:'04',lbl:'Emails Sent',val:stats.sent,tot:Math.max(stats.total,1),sub:`${stats.replied} replied · ${stats.booked} booked`,cta:'Send more →',t:'send'},
+              ].map(({n,lbl,val,tot,sub,cta,t},i,arr)=>{
                 const pct=tot>0?Math.min(Math.round((val/tot)*100),100):0
                 const done=pct===100&&val>0
                 return(
-                  <div key={n} className="pipe">
+                  <div key={n} className="pipe" style={{borderRight:i<arr.length-1?'1px solid var(--b)':'none',position:'relative'}}>
                     <div className="pipe-n">Step {n}</div>
                     <div className="pipe-lbl">{lbl}</div>
                     <div className={`pipe-val ${done?'done':val>0?'on':''}`}>{val}</div>
@@ -947,277 +1059,94 @@ export default function App(){
               })}
             </div>
 
-            <div className="stitle">Quick Actions</div>
-            <div className="agrid mb24">
-              {[
-                {ico:'↻',lbl:'Refresh Systems',sub:'Re-ping all integrations and reload leads',act:checkHealth,dis:hl,prime:false},
-                {ico:'⭐',lbl:'Scrape GitHub',sub:`Discover AI-forward orgs · score leads · enrich with contacts`,act:()=>setTab('scrape'),dis:false,prime:false},
-                {ico:'✦',lbl:'Generate Emails',sub:`${leads.filter(l=>!l.emailBody).length} leads still need emails written`,act:()=>setTab('generate'),dis:!health?.env?.anthropic,prime:false},
-                {ico:'◈',lbl:'View CRM',sub:`${stats.total} leads · ${stats.hasContact} contacts filled`,act:()=>setTab('crm'),dis:false,prime:false},
-                {ico:'▶',lbl:'Send Campaign',sub:readyCnt>0?`${readyCnt} leads ready — all systems go`:`Add contact emails to unlock`,act:()=>setTab('send'),dis:readyCnt===0,prime:readyCnt>0},
-                {ico:'↗',lbl:'Open Airtable',sub:'Add contact emails, update lead status',act:()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank'),dis:false,prime:false},
-              ].map(({ico,lbl,sub,act,dis,prime})=>(
-                <button key={lbl} className={`abtn ${prime?'prime':''}`} onClick={act as any} disabled={dis}>
-                  <div className="aico">{ico}</div>
-                  <div>
-                    <div className="albl">{lbl}</div>
-                    <div className="asub">{sub}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
+            {/* ── BENTO ROW 4: Quick actions + Discord + Env ── */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
 
-            {health&&(
-              <div className="card">
-                <div className="card-hd">
-                  <div className="ct">Environment Variables</div>
-                </div>
-                <div className="cklist">
+              {/* Quick actions */}
+              <div className="bcell" style={{padding:0,overflow:'hidden'}}>
+                <div style={{padding:'14px 18px',borderBottom:'1px solid var(--b)',fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px'}}>Quick Actions</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:1,background:'var(--b)'}}>
                   {[
-                    {key:'AIRTABLE_API_KEY',ok:!!health.env?.airtable,hint:'airtable.com/create/tokens — data.records:read + data.records:write'},
-                    {key:'ANTHROPIC_API_KEY',ok:!!health.env?.anthropic,hint:'console.anthropic.com — required for email generation'},
-                    {key:'SMTP_EMAIL',ok:!!health.env?.smtpEmail,hint:health.env?.smtpEmailVal||'hello@lobstack.ai'},
-                    {key:'SMTP_PASSWORD',ok:!!health.env?.smtpPass,hint:'Your PrivateEmail account password'},
-                    {key:'GITHUB_TOKEN',ok:!!health.env?.githubToken,hint:'Optional — upgrades scraper from 60 to 5,000 req/hr'},
-                    {key:'HUNTER_API_KEY',ok:!!health.env?.hunterKey,hint:'Optional — hunter.io for 3× more contact emails. Free: 25/mo'},
-                    {key:'DISCORD_WEBHOOK_URL',ok:!!health.env?.discordWebhook,hint:'Optional — get instant reply alerts in Discord. Channel → ⚙️ → Integrations → Webhooks'},
-                  ].map(({key,ok,hint})=>(
-                    <div key={key} className="erow">
-                      <span className={ok?'eok':'emiss'}>{ok?'✓':'○'}</span>
-                      <code style={{fontSize:11,background:'transparent',padding:0,color:ok?'var(--ink)':'var(--ink3)'}}>{key}</code>
-                      <span className="ehint">{hint}</span>
-                      {!ok&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--red)',background:'#E8414210',padding:'2px 7px',borderRadius:4,flexShrink:0}}>Missing</span>}
-                    </div>
+                    {ico:'↻',lbl:'Refresh Systems',act:checkHealth,dis:hl},
+                    {ico:'⭐',lbl:'Discover Leads',act:()=>setTab('scrape'),dis:false},
+                    {ico:'✦',lbl:'Generate Emails',act:()=>setTab('generate'),dis:!health?.env?.anthropic},
+                    {ico:'▶',lbl:'Send Campaign',act:()=>setTab('send'),dis:readyCnt===0,prime:readyCnt>0},
+                    {ico:'◈',lbl:'View CRM',act:()=>setTab('crm'),dis:false},
+                    {ico:'↗',lbl:'Open Airtable',act:()=>window.open('https://airtable.com/appnF2fNAyEYnscvo','_blank'),dis:false},
+                  ].map(({ico,lbl,act,dis,prime}:any)=>(
+                    <button key={lbl}
+                      onClick={act} disabled={dis}
+                      style={{display:'flex',alignItems:'center',gap:10,padding:'14px 16px',background:prime?'#E8414208':'var(--s1)',border:'none',cursor:dis?'not-allowed':'pointer',textAlign:'left',transition:'background .1s',opacity:dis?.5:1}}
+                      onMouseEnter={e=>{if(!dis)(e.currentTarget as HTMLButtonElement).style.background=prime?'#E8414215':'var(--s2)'}}
+                      onMouseLeave={e=>{(e.currentTarget as HTMLButtonElement).style.background=prime?'#E8414208':'var(--s1)'}}>
+                      <span style={{fontSize:16,color:prime?'var(--red2)':'var(--ink3)'}}>{ico}</span>
+                      <span style={{fontFamily:'var(--body)',fontSize:12,fontWeight:600,color:prime?'var(--red2)':'var(--ink)'}}>{lbl}</span>
+                    </button>
                   ))}
                 </div>
               </div>
-            )}
 
-            {/* SEQUENCE STATUS */}
-            {leads.length>0&&(()=>{
-              const seqCounts = {
-                cold:     leads.filter(l=>!l.sequenceStatus||l.sequenceStatus==='Cold').length,
-                email1:   leads.filter(l=>l.sequenceStatus==='Email 1 Sent').length,
-                fu1:      leads.filter(l=>l.sequenceStatus==='Follow-up 1 Sent').length,
-                fu2:      leads.filter(l=>l.sequenceStatus==='Follow-up 2 Sent').length,
-                replied:  leads.filter(l=>l.sequenceStatus==='Replied').length,
-                booked:   leads.filter(l=>l.sequenceStatus==='Booked').length,
-                optedOut: leads.filter(l=>l.sequenceStatus==='Opted Out').length,
-              }
-              const fu1Due = leads.filter(l=>{
-                if(l.sequenceStatus!=='Email 1 Sent'||!l.followUp1Body) return false
-                return true // server checks exact days, we just show count
-              }).length
-              const fu2Due = leads.filter(l=>l.sequenceStatus==='Follow-up 1 Sent'&&!!l.followUp2Body).length
-              return(
-                <>
-                  {/* TODAY'S QUEUE */}
-                  {(()=>{
-                    const today = new Date().toISOString().split('T')[0]
-                    const WARMUP_LIMITS = [10,20,35,50,75,100]
-                    const days = Math.floor((Date.now() - new Date('2026-03-28').getTime()) / 86400000)
-                    const week = Math.max(1, Math.min(6, Math.ceil((days+1)/7)))
-                    const dailyMax = WARMUP_LIMITS[week-1]
-                    const sentToday = leads.filter(l=>l.status==='Email Sent'&&l.lastContacted===today).length
-                    const budget = Math.max(0, dailyMax - sentToday)
-                    const readyToSend = leads.filter(l=>l.status==='New'&&l.emailBody&&l.contactEmail&&!l.bounced&&!l.disqualified).length
-                    const fu1Due = leads.filter(l=>{
-                      if(l.sequenceStatus!=='Email 1 Sent'||!l.followUp1Body) return false
-                      const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
-                      return d>=5
-                    }).length
-                    const fu2Due = leads.filter(l=>{
-                      if(l.sequenceStatus!=='Follow-up 1 Sent'||!l.followUp2Body) return false
-                      const d=l.lastContacted?Math.floor((Date.now()-new Date(l.lastContacted).getTime())/86400000):0
-                      return d>=7
-                    }).length
-                    const needsEmail = leads.filter(l=>!l.emailBody&&l.contactEmail&&!l.disqualified).length
-                    const needsContact = leads.filter(l=>!l.contactEmail&&!l.disqualified).length
-                    const bounced = leads.filter(l=>l.bounced).length
-                    const disqualified = leads.filter(l=>l.disqualified).length
-
-                    return(
-                      <>
-                        <div className="stitle">Today's Queue</div>
-                        <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:24,boxShadow:'var(--sh)'}}>
-                          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)'}}>
-                            {[
-                              {lbl:'Send budget',val:budget,sub:`of ${dailyMax}/day · Week ${week}`,col:budget===0?'var(--red)':budget<5?'var(--yellow)':'var(--green)',act:()=>setTab('send')},
-                              {lbl:'Ready to send',val:readyToSend,sub:'passed validation',col:readyToSend>0?'var(--ink)':'var(--ink4)',act:()=>setTab('send')},
-                              {lbl:'FU1 due today',val:fu1Due,sub:'5+ days no reply',col:fu1Due>0?'var(--yellow)':'var(--ink4)',act:null},
-                              {lbl:'FU2 due today',val:fu2Due,sub:'7+ days no reply',col:fu2Due>0?'var(--orange,#d97706)':'var(--ink4)',act:null},
-                            ].map(({lbl,val,sub,col,act},i,arr)=>(
-                              <div key={lbl}
-                                onClick={act||undefined}
-                                style={{padding:'16px',borderRight:i<arr.length-1?'1px solid var(--b)':'none',textAlign:'center',cursor:act?'pointer':'default',transition:'background .1s'}}
-                                onMouseEnter={act?e=>(e.currentTarget.style.background='var(--s2)'):undefined}
-                                onMouseLeave={act?e=>(e.currentTarget.style.background=''):undefined}>
-                                <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:26,letterSpacing:'-1px',color:val>0?col:'var(--ink4)'}}>{val}</div>
-                                <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:4}}>{lbl}</div>
-                                <div style={{fontFamily:'var(--body)',fontSize:10,color:'var(--ink4)',marginTop:2}}>{sub}</div>
-                              </div>
-                            ))}
-                          </div>
-                          <div style={{padding:'10px 16px',borderTop:'1px solid var(--b)',background:'var(--s2)',display:'flex',gap:20,flexWrap:'wrap'}}>
-                            {[
-                              {lbl:'Need email written',val:needsEmail,col:'var(--yellow)',act:()=>setTab('generate')},
-                              {lbl:'Need contact email',val:needsContact,col:'var(--ink3)',act:()=>setTab('crm')},
-                              {lbl:'Bounced',val:bounced,col:'var(--red)',act:()=>{setTab('crm');setCrmFilter('noemail')}},
-                              {lbl:'Disqualified',val:disqualified,col:'var(--ink4)',act:null},
-                            ].filter(m=>m.val>0).map(({lbl,val,col,act})=>(
-                              <span key={lbl} onClick={act||undefined} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',cursor:act?'pointer':'default',display:'flex',alignItems:'center',gap:4}}>
-                                <span style={{fontWeight:700,color:col}}>{val}</span> {lbl}
-                              </span>
-                            ))}
-                            {needsEmail===0&&needsContact===0&&bounced===0&&readyToSend===0&&fu1Due===0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)'}}>✓ All clear</span>}
-                          </div>
-                        </div>
-                      </>
-                    )
-                  })()}
-
-                  <div className="stitle">Sequence Pipeline</div>
-                  <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',overflow:'hidden',marginBottom:28,boxShadow:'var(--sh)'}}>
-                    <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)'}}>
-                      {[
-                        {lbl:'Cold',val:seqCounts.cold,col:'var(--ink4)'},
-                        {lbl:'Email 1 Sent',val:seqCounts.email1,col:'var(--blue)'},
-                        {lbl:'FU1 Sent',val:seqCounts.fu1,col:'var(--yellow)'},
-                        {lbl:'FU2 Sent',val:seqCounts.fu2,col:'#d97706'},
-                        {lbl:'Replied',val:seqCounts.replied,col:'var(--green)'},
-                        {lbl:'Booked',val:seqCounts.booked,col:'var(--green)'},
-                        {lbl:'Opted Out',val:seqCounts.optedOut,col:'var(--red)'},
-                      ].map(({lbl,val,col},i,arr)=>(
-                        <div key={lbl} style={{padding:'18px 16px',borderRight:i<arr.length-1?'1px solid var(--b)':'none',textAlign:'center'}}>
-                          <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:28,letterSpacing:'-1px',color:val>0?col:'var(--ink4)'}}>{val}</div>
-                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:6}}>{lbl}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {(fu1Due>0||fu2Due>0)&&(
-                      <div style={{padding:'12px 20px',borderTop:'1px solid var(--b)',background:'#d9770608',display:'flex',alignItems:'center',gap:16}}>
-                        <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--yellow)'}}>⚡ Auto-scheduler active</span>
-                        {fu1Due>0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{fu1Due} leads awaiting FU1 (fires at 9am UTC when 5+ days since send)</span>}
-                        {fu2Due>0&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{fu2Due} leads awaiting FU2</span>}
+              {/* Env + Discord */}
+              <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                {/* Env vars */}
+                <div className="bcell" style={{padding:'14px 18px',flex:1}}>
+                  <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'1px',marginBottom:12}}>Environment</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:7}}>
+                    {[
+                      {key:'AIRTABLE_API_KEY',     ok:!!health?.env?.airtable,     hint:'airtable.com/create/tokens'},
+                      {key:'ANTHROPIC_API_KEY',     ok:!!health?.env?.anthropic,    hint:'console.anthropic.com'},
+                      {key:'SMTP_EMAIL + PASSWORD', ok:!!health?.smtp?.ok,          hint:'PrivateEmail credentials'},
+                      {key:'GITHUB_TOKEN',          ok:!!health?.env?.githubToken,  hint:'5,000 req/hr vs 60 anon'},
+                      {key:'HUNTER_API_KEY',        ok:!!health?.env?.hunterKey,    hint:'Optional · hunter.io'},
+                      {key:'DISCORD_WEBHOOK_URL',   ok:!!health?.env?.discordWebhook,hint:'Optional · Discord channel'},
+                    ].map(({key,ok,hint})=>(
+                      <div key={key} style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{color:ok?'var(--green)':'var(--ink4)',fontSize:12,flexShrink:0}}>{ok?'✓':'○'}</span>
+                        <span style={{fontFamily:'var(--mono)',fontSize:10,color:ok?'var(--ink)':'var(--ink3)',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{key}</span>
+                        {!ok&&<span style={{fontFamily:'var(--body)',fontSize:9,color:'var(--ink4)',flexShrink:0}}>{hint}</span>}
                       </div>
-                    )}
+                    ))}
                   </div>
-                </>
-              )
-            })()}
+                </div>
 
-            {/* DOMAIN WARMUP TRACKER */}
-            {(()=>{
-              const daysSinceFirst = stats.sent>0 ? Math.floor((Date.now()-new Date('2026-03-28').getTime())/86400000) : 0
-              const weekNum = Math.max(1,Math.ceil(daysSinceFirst/7))
-              const dailyTarget = weekNum===1?10:weekNum===2?20:weekNum===3?35:50
-              const warmupPct = Math.min(100,Math.round((stats.sent/(dailyTarget*7*weekNum))*100))
-              return stats.sent>0&&(
-                <>
-                  <div className="stitle" style={{marginTop:24}}>Domain Warmup</div>
-                  <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)'}}>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:16,marginBottom:16}}>
-                      {[
-                        {lbl:'Week 1',target:'~10/day',status:weekNum>=1?'done':'upcoming'},
-                        {lbl:'Week 2',target:'~20/day',status:weekNum>=2?'done':weekNum===1?'active':'upcoming'},
-                        {lbl:'Week 3',target:'~35/day',status:weekNum>=3?'done':weekNum===2?'active':'upcoming'},
-                        {lbl:'Week 4+',target:'~50/day',status:weekNum>=4?'active':'upcoming'},
-                      ].map(w=>(
-                        <div key={w.lbl} style={{padding:'12px 14px',borderRadius:'var(--r)',background:w.status==='active'?'#E8414208':w.status==='done'?'#16a34a08':'var(--s2)',border:`1px solid ${w.status==='active'?'var(--red2)':w.status==='done'?'#16a34a30':'var(--b)'}`,textAlign:'center'}}>
-                          <div style={{fontFamily:'var(--mono)',fontSize:10,color:w.status==='active'?'var(--red2)':w.status==='done'?'var(--green)':'var(--ink4)',fontWeight:700,marginBottom:4}}>{w.lbl}</div>
-                          <div style={{fontFamily:'var(--mono)',fontSize:11,color:w.status==='upcoming'?'var(--ink4)':'var(--ink)'}}>{w.target}</div>
-                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:w.status==='active'?'var(--red2)':w.status==='done'?'var(--green)':'var(--ink4)',marginTop:4}}>{w.status==='active'?'← NOW':w.status==='done'?'✓ DONE':'—'}</div>
+                {/* Discord */}
+                {!health?.env?.discordWebhook?(
+                  <div className="bcell" style={{padding:'14px 18px',background:'#d9770608',borderColor:'#d9770625'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                      <span style={{fontSize:16}}>🔔</span>
+                      <span style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:12,color:'var(--ink)'}}>Discord Alerts</span>
+                      <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--yellow)',background:'#d9770615',padding:'1px 6px',borderRadius:4}}>NOT SET</span>
+                    </div>
+                    <div style={{fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',lineHeight:1.5,marginBottom:10}}>
+                      Get instant reply alerts and daily cron summaries in Discord.
+                    </div>
+                    <div style={{display:'flex',gap:8}}>
+                      <a href="https://discord.com" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-xs" style={{textDecoration:'none'}}>Open Discord</a>
+                      <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify').then(r=>r.json()).then(d=>toast(d.message||'Test sent','o'))}>Test webhook</button>
+                    </div>
+                  </div>
+                ):(
+                  <div className="bcell" style={{padding:'14px 18px',background:'#16a34a06',borderColor:'#16a34a20'}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{fontSize:16}}>🔔</span>
+                        <div>
+                          <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:12,color:'var(--ink)'}}>Discord Connected</div>
+                          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',marginTop:1}}>Reply alerts + cron summaries active</div>
                         </div>
-                      ))}
-                    </div>
-                    <div style={{background:'var(--s2)',borderRadius:'var(--r)',padding:'10px 14px',display:'flex',alignItems:'center',gap:12}}>
-                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexShrink:0}}>{stats.sent} sent total</span>
-                      <div style={{flex:1,height:4,background:'var(--b2)',borderRadius:2,overflow:'hidden'}}>
-                        <div style={{height:'100%',width:`${warmupPct}%`,background:'var(--red2)',borderRadius:2,transition:'width .3s'}}/>
                       </div>
-                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexShrink:0}}>Week {weekNum} · {dailyTarget}/day target</span>
+                      <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify').then(r=>r.json()).then(d=>toast(d.ok?'Test sent ✓':'Failed',d.ok?'o':'e'))}>Send test</button>
                     </div>
                   </div>
-                </>
-              )
-            })()}
-
-            {/* HUNTER.IO SETUP PROMPT */}
-            {!health?.env?.hunterKey&&(
-              <>
-                <div className="stitle" style={{marginTop:24}}>Improve Email Discovery</div>
-                <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)',display:'flex',alignItems:'flex-start',gap:16}}>
-                  <div style={{fontSize:20,flexShrink:0}}>🎯</div>
-                  <div>
-                    <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:4}}>Add Hunter.io for 3× more contact emails</div>
-                    <div style={{fontFamily:'var(--body)',fontSize:12,color:'var(--ink3)',lineHeight:1.6,marginBottom:12}}>
-                      Currently finding emails from GitHub public profiles and pattern inference. Hunter.io finds verified corporate emails from domain search — dramatically improves hit rate for orgs without public GitHub emails.
-                    </div>
-                    <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-                      <a href="https://hunter.io/users/sign_up" target="_blank" rel="noopener noreferrer" className="btn btn-dark btn-sm" style={{textDecoration:'none'}}>Get free API key →</a>
-                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>Free: 25 searches/mo · Starter: $49/mo for 500</span>
-                    </div>
-                    <div style={{marginTop:12,fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)'}}>
-                      Add <code style={{background:'var(--s3)',padding:'1px 6px',borderRadius:3}}>HUNTER_API_KEY</code> in Vercel → Settings → Environment Variables, then redeploy
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-            {health?.env?.hunterKey&&(
-              <div style={{marginTop:8,marginBottom:20,display:'flex',alignItems:'center',gap:8,fontFamily:'var(--mono)',fontSize:11}}>
-                <span style={{color:'var(--green)'}}>✓</span>
-                <span style={{color:'var(--ink3)'}}>Hunter.io connected — email enrichment active on all new scrapes</span>
+                )}
               </div>
-            )}
+            </div>
 
-            {/* DISCORD SETUP / STATUS */}
-            {!health?.env?.discordWebhook?(
-              <>
-                <div className="stitle" style={{marginTop:24}}>Discord Notifications</div>
-                <div style={{background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r2)',padding:'18px 20px',marginBottom:20,boxShadow:'var(--sh)',display:'flex',alignItems:'flex-start',gap:16}}>
-                  <div style={{fontSize:20,flexShrink:0}}>
-                    <svg width="22" height="22" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M60.1 4.9A58.5 58.5 0 0 0 45.4.7a.2.2 0 0 0-.2.1c-.6 1.1-1.3 2.6-1.8 3.7a54 54 0 0 0-16.2 0A38 38 0 0 0 25.4.8a.2.2 0 0 0-.2-.1 58.4 58.4 0 0 0-14.7 4.2.2.2 0 0 0-.1.1C1.6 18.7-.9 32.2.3 45.5a.2.2 0 0 0 .1.2 58.8 58.8 0 0 0 17.7 9 .2.2 0 0 0 .2-.1c1.4-1.9 2.6-3.9 3.6-6 .1-.2 0-.4-.2-.5a38.7 38.7 0 0 1-5.5-2.6.2.2 0 0 1 0-.4l1.1-.8a.2.2 0 0 1 .2 0c11.6 5.3 24.1 5.3 35.5 0a.2.2 0 0 1 .2 0l1.1.8a.2.2 0 0 1 0 .4 36.2 36.2 0 0 1-5.5 2.6c-.2.1-.3.3-.2.5 1.1 2 2.3 4 3.6 6a.2.2 0 0 0 .2.1 58.6 58.6 0 0 0 17.7-9 .2.2 0 0 0 .1-.2c1.5-15.4-2.5-28.8-10.5-40.7a.2.2 0 0 0-.1-.1zM23.7 37.8c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2c3.6 0 6.5 3.3 6.4 7.2 0 4-2.8 7.2-6.4 7.2zm23.7 0c-3.5 0-6.4-3.2-6.4-7.2s2.8-7.2 6.4-7.2c3.6 0 6.5 3.3 6.4 7.2 0 4-2.8 7.2-6.4 7.2z" fill="#5865F2"/>
-                    </svg>
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontFamily:'var(--sans)',fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:4}}>Get instant reply alerts in Discord</div>
-                    <div style={{fontFamily:'var(--body)',fontSize:12,color:'var(--ink3)',lineHeight:1.6,marginBottom:12}}>
-                      When a lead replies, you'll get an immediate Discord message with their reply, intent classification, and Claude's suggested response. Daily cron summaries posted when follow-ups send.
-                    </div>
-                    <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink3)',background:'var(--s2)',borderRadius:'var(--r)',padding:'10px 14px',marginBottom:12,lineHeight:1.8}}>
-                      1. Open Discord → your server → any channel<br/>
-                      2. Click ⚙️ → Integrations → Webhooks → New Webhook<br/>
-                      3. Copy URL → add as <code style={{background:'var(--s3)',padding:'1px 6px',borderRadius:3,color:'var(--ink)'}}>DISCORD_WEBHOOK_URL</code> in Vercel env vars
-                    </div>
-                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
-                      <a href="https://discord.com/channels/@me" target="_blank" rel="noopener noreferrer" className="btn btn-dark btn-sm" style={{textDecoration:'none'}}>Open Discord →</a>
-                      <a href="https://vercel.com/dashboard" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" style={{textDecoration:'none'}}>Vercel env vars →</a>
-                      <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify?test=1').then(r=>r.json()).then(d=>toast(d.message||'Test sent','o'))}>
-                        Test webhook
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ):(
-              <div style={{marginTop:8,marginBottom:20,display:'flex',alignItems:'center',justifyContent:'space-between',background:'var(--s1)',border:'1px solid var(--b)',borderRadius:'var(--r)',padding:'12px 16px',boxShadow:'var(--sh)'}}>
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <span style={{color:'var(--green)',fontSize:16}}>✓</span>
-                  <div>
-                    <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--ink)',fontWeight:600}}>Discord connected</div>
-                    <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',marginTop:2}}>Reply alerts + cron summaries active</div>
-                  </div>
-                </div>
-                <button className="btn btn-ghost btn-xs" onClick={()=>fetch('/api/notify?test=1').then(r=>r.json()).then(d=>toast(d.ok?'Test sent to Discord ✓':'Failed: '+d.message,d.ok?'o':'e'))}>
-                  Send test
-                </button>
-              </div>
-            )}
-
-            <div className="stitle" style={{marginTop:24}}>System Log</div>
-            <Logbox maxH="220px"/>
+            {/* System Log */}
+            <div className="card">
+              <div className="card-hd" style={{marginBottom:12}}><div className="ct">System Log</div></div>
+              <Logbox maxH="180px"/>
+            </div>
           </>}
 
           {/* ══ SCRAPE ══ */}
@@ -2449,290 +2378,252 @@ export default function App(){
 
           {/* ══ ANALYTICS ══ */}
           {tab==='analytics'&&(()=>{
-            const total      = leads.length
-            const withEmail  = leads.filter(l=>l.contactEmail).length
-            const withSeq    = leads.filter(l=>l.emailBody).length
-            const sent       = leads.filter(l=>l.status==='Email Sent').length
-            const replied    = leads.filter(l=>l.status==='Replied').length
-            const booked     = leads.filter(l=>l.status==='Booked Call').length
-            const opened     = leads.filter(l=>l.openCount>0).length
-            const bounced    = leads.filter(l=>l.bounced).length
-            const disq       = leads.filter(l=>l.disqualified).length
+            const total     = leads.length
+            const withEmail = leads.filter(l=>l.contactEmail).length
+            const withSeq   = leads.filter(l=>l.emailBody).length
+            const sent      = leads.filter(l=>l.status==='Email Sent').length
+            const replied   = leads.filter(l=>l.status==='Replied').length
+            const booked    = leads.filter(l=>l.status==='Booked Call').length
+            const opened    = leads.filter(l=>l.openCount>0).length
+            const bounced   = leads.filter(l=>l.bounced).length
+            const disq      = leads.filter(l=>l.disqualified).length
+            const avgScore  = leads.length>0?Math.round(leads.reduce((s,l)=>s+(l.leadScore||0),0)/leads.length):0
+            const queued    = leads.filter(l=>l.status==='New'&&l.emailBody&&l.contactEmail).length
 
-            // Send activity by date
             const byDate: Record<string,number> = {}
             leads.forEach(l=>{if(l.lastContacted&&l.status==='Email Sent')byDate[l.lastContacted]=(byDate[l.lastContacted]||0)+1})
             const dateKeys = Object.keys(byDate).sort()
             const maxDay   = Math.max(...dateKeys.map(d=>byDate[d]),1)
 
-            // Score buckets
-            const sBuckets=[
-              {lbl:'81–100',n:leads.filter(l=>l.leadScore>80).length,          c:'#E84142'},
-              {lbl:'61–80', n:leads.filter(l=>l.leadScore>60&&l.leadScore<=80).length,c:'#16a34a'},
-              {lbl:'41–60', n:leads.filter(l=>l.leadScore>40&&l.leadScore<=60).length,c:'#d97706'},
-              {lbl:'21–40', n:leads.filter(l=>l.leadScore>20&&l.leadScore<=40).length,c:'#2563eb'},
-              {lbl:'0–20',  n:leads.filter(l=>l.leadScore<=20).length,          c:'#6b7280'},
-            ]
-            const maxB = Math.max(...sBuckets.map(b=>b.n),1)
-
-            // Company types
             const tm: Record<string,number>={}
             leads.forEach(l=>{const t=l.companyType||'Unknown';tm[t]=(tm[t]||0)+1})
-            const types=Object.entries(tm).sort((a,b)=>b[1]-a[1])
-            const tColors=['#E84142','#2563eb','#16a34a','#d97706','#6b7280','#7c3aed']
-            const circ=2*Math.PI*52
+            const types   = Object.entries(tm).sort((a,b)=>b[1]-a[1])
+            const tColors = ['#E84142','#2563eb','#16a34a','#d97706','#7c3aed','#6b7280']
+            const circ    = 2*Math.PI*50
 
-            // Funnel
-            const funnel=[
-              {lbl:'Total leads',    v:total,     c:'#6b7280'},
-              {lbl:'Has email',      v:withEmail, c:'#2563eb'},
-              {lbl:'Has sequence',   v:withSeq,   c:'#7c3aed'},
-              {lbl:'Sent',           v:sent,      c:'#d97706'},
-              {lbl:'Opened',         v:opened,    c:'#0891b2'},
-              {lbl:'Replied',        v:replied,   c:'#16a34a'},
-              {lbl:'Booked',         v:booked,    c:'#E84142'},
-            ]
-
-            // Conversion rates
-            const conv=[
-              {lbl:'Lead → Contact', n:withEmail, d:total,     pct:total     ?Math.round(withEmail/total*100):0,    tgt:80},
-              {lbl:'Contact → Sent', n:sent,      d:withEmail, pct:withEmail ?Math.round(sent/withEmail*100):0,     tgt:100},
-              {lbl:'Sent → Opened',  n:opened,    d:sent,      pct:sent      ?Math.round(opened/sent*100):0,        tgt:30},
-              {lbl:'Sent → Replied', n:replied,   d:sent,      pct:sent      ?Math.round(replied/sent*100):0,       tgt:5},
-              {lbl:'Reply → Booked', n:booked,    d:replied,   pct:replied   ?Math.round(booked/replied*100):0,     tgt:30},
-            ]
-
-            const pBar=(pct:number,col:string,h=6)=>(
-              <div style={{height:h,background:'var(--b2)',borderRadius:3,overflow:'hidden'}}>
-                <div style={{height:'100%',width:`${pct}%`,background:col,borderRadius:3,transition:'width .5s ease'}}/>
+            const ABar=({pct,col,h=8,delay=0}:{pct:number,col:string,h?:number,delay?:number})=>(
+              <div style={{height:h,background:'var(--b2)',borderRadius:4,overflow:'hidden'}}>
+                <div className="bar-grow" style={{height:'100%',width:`${Math.max(pct,0)}%`,background:col,borderRadius:4,animationDelay:`${delay}ms`,transformOrigin:'left'}}/>
               </div>
             )
-
-            const avgScore = leads.length>0?Math.round(leads.reduce((s,l)=>s+(l.leadScore||0),0)/leads.length):0
 
             return(
               <>
                 <div className="ph">
                   <div className="ph-t">Analytics</div>
-                  <div className="ph-s">Live from {total} leads in CRM · refreshes on load</div>
+                  <div className="ph-s">Live from {total} leads · {sent} emails sent · updated on load</div>
                 </div>
 
-                {/* ── STAT ROW ── */}
-                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:16}}>
+                {/* KPI bento row */}
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
                   {[
-                    {lbl:'Total Leads',    v:total,    c:'var(--ink)'},
-                    {lbl:'Emails Sent',    v:sent,     c:'#E84142'},
-                    {lbl:'Replies',        v:replied,  c:'#16a34a'},
-                    {lbl:'Avg Lead Score', v:avgScore, c:'#d97706'},
-                  ].map(s=>(
-                    <div key={s.lbl} className="card" style={{textAlign:'center',padding:'18px 12px'}}>
-                      <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:32,letterSpacing:'-2px',color:s.c,lineHeight:1}}>{s.v}</div>
-                      <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:6}}>{s.lbl}</div>
+                    {lbl:'Total Leads',v:total,   c:'var(--ink)', bg:'var(--s1)'},
+                    {lbl:'Emails Sent',v:sent,    c:'#E84142',   bg:'#E8414206'},
+                    {lbl:'Opens',      v:opened,  c:'#0891b2',   bg:'#0891b206'},
+                    {lbl:'Replies',    v:replied, c:'#16a34a',   bg:'#16a34a06'},
+                    {lbl:'Queued',     v:queued,  c:'#d97706',   bg:'#d9770606'},
+                    {lbl:'High-Fit',   v:leads.filter(l=>l.leadScore>60).length,c:'#7c3aed',bg:'#7c3aed06'},
+                    {lbl:'Avg Score',  v:avgScore,c:'var(--ink3)',bg:'var(--s2)'},
+                    {lbl:'Booked',     v:booked,  c:'#E84142',   bg:'#E8414206'},
+                  ].map((s,i)=>(
+                    <div key={s.lbl} className="bcell fade-up" style={{background:s.bg,padding:'16px 18px',animationDelay:`${i*35}ms`}}>
+                      <div className="count-up" style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:32,letterSpacing:'-2px',color:s.c,lineHeight:1,animationDelay:`${i*35}ms`}}>{s.v}</div>
+                      <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',textTransform:'uppercase',letterSpacing:'.8px',marginTop:7}}>{s.lbl}</div>
                     </div>
                   ))}
                 </div>
 
-                {/* ── ROW 1: Funnel + Conversions ── */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
-
-                  {/* FUNNEL */}
-                  <div className="card">
-                    <div className="card-hd"><div className="ct">Outreach Funnel</div></div>
-                    <div style={{paddingTop:4}}>
-                      {funnel.map(s=>{
-                        const pct=total>0?Math.round(s.v/total*100):0
-                        return(
-                          <div key={s.lbl} style={{marginBottom:12}}>
-                            <div style={{display:'flex',justifyContent:'space-between',marginBottom:5,alignItems:'center'}}>
-                              <div style={{display:'flex',alignItems:'center',gap:7}}>
-                                <div style={{width:7,height:7,borderRadius:'50%',background:s.c,flexShrink:0}}/>
-                                <span style={{fontFamily:'var(--mono)',fontSize:11}}>{s.lbl}</span>
-                              </div>
-                              <div style={{display:'flex',alignItems:'center',gap:10}}>
-                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{pct}%</span>
-                                <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:28,textAlign:'right'}}>{s.v}</span>
-                              </div>
+                {/* Funnel + Send Activity */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+                  <div className="bcell">
+                    <div className="card-hd" style={{marginBottom:14}}><div className="ct">Outreach Funnel</div></div>
+                    {[
+                      {lbl:'Total leads',v:total,   c:'#6b7280',d:0},
+                      {lbl:'Has email',  v:withEmail,c:'#2563eb',d:50},
+                      {lbl:'Has sequence',v:withSeq, c:'#7c3aed',d:100},
+                      {lbl:'Sent',       v:sent,    c:'#d97706',d:150},
+                      {lbl:'Opened',     v:opened,  c:'#0891b2',d:200},
+                      {lbl:'Replied',    v:replied, c:'#16a34a',d:250},
+                      {lbl:'Booked',     v:booked,  c:'#E84142',d:300},
+                    ].map(s=>{
+                      const pct=total>0?Math.round(s.v/total*100):0
+                      return(
+                        <div key={s.lbl} className="fade-up" style={{marginBottom:10,animationDelay:`${s.d}ms`}}>
+                          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'center'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:7}}>
+                              <div style={{width:6,height:6,borderRadius:'50%',background:s.c,boxShadow:`0 0 5px ${s.c}70`}}/>
+                              <span style={{fontFamily:'var(--mono)',fontSize:11}}>{s.lbl}</span>
                             </div>
-                            {pBar(pct,s.c,14)}
+                            <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{pct}{'%'}</span>
+                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:28,textAlign:'right'}}>{s.v}</span>
+                            </div>
                           </div>
-                        )
-                      })}
-                    </div>
+                          <ABar pct={pct} col={s.c} h={10} delay={s.d+100}/>
+                        </div>
+                      )
+                    })}
                   </div>
 
-                  {/* CONVERSION RATES */}
-                  <div className="card">
-                    <div className="card-hd"><div className="ct">Conversion Rates</div></div>
-                    <div style={{paddingTop:4}}>
-                      {conv.map(r=>{
-                        const col=r.pct>=r.tgt?'#16a34a':r.pct>=r.tgt*0.5?'#d97706':'#E84142'
-                        const pctOfTarget=Math.min(100,r.tgt>0?Math.round(r.pct/r.tgt*100):0)
-                        return(
-                          <div key={r.lbl} style={{marginBottom:14}}>
-                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:5}}>
-                              <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{r.lbl}</span>
-                              <div style={{display:'flex',alignItems:'baseline',gap:8}}>
-                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{r.n}/{r.d}</span>
-                                <span style={{fontFamily:'var(--sans)',fontSize:20,fontWeight:800,letterSpacing:'-1px',color:col,lineHeight:1}}>{r.pct}{'%'}</span>
-                              </div>
-                            </div>
-                            {pBar(pctOfTarget,col,6)}
-                            <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:2}}>target {r.tgt}{'%'}</div>
-                          </div>
-                        )
-                      })}
-                      <div style={{marginTop:12,padding:'10px 12px',background:'var(--s2)',borderRadius:'var(--r)',border:'1px solid var(--b)',fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)',lineHeight:1.5}}>
-                        Cold email benchmark: 2–5% good · 5–10% great · 10%+ exceptional
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── ROW 2: Send activity + Score dist ── */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
-
-                  {/* SEND ACTIVITY BAR CHART */}
-                  <div className="card">
-                    <div className="card-hd">
+                  <div className="bcell">
+                    <div className="card-hd" style={{marginBottom:14}}>
                       <div className="ct">Send Activity</div>
                       <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{sent} total · {dateKeys.length} days</span>
                     </div>
                     {dateKeys.length===0?(
-                      <div style={{padding:'32px',textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:'var(--ink4)'}}>No sends yet</div>
+                      <div style={{padding:'40px 0',textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:'var(--ink4)'}}>No sends yet</div>
                     ):(
-                      <div style={{paddingTop:4}}>
-                        <div style={{display:'flex',alignItems:'flex-end',gap:8,height:140,paddingBottom:24,borderBottom:'1px solid var(--b)',position:'relative'}}>
-                          {[0.25,0.5,0.75,1].map(p=>(
-                            <div key={p} style={{position:'absolute',left:0,right:0,bottom:24+116*p,borderTop:'1px dashed var(--b)',opacity:.5}}/>
+                      <>
+                        <div style={{display:'flex',alignItems:'flex-end',gap:8,height:130,paddingBottom:24,position:'relative',borderBottom:'1px solid var(--b)'}}>
+                          {[.25,.5,.75,1].map(p=>(
+                            <div key={p} style={{position:'absolute',left:0,right:0,bottom:24+106*p,borderTop:'1px dashed var(--b)',opacity:.4}}/>
                           ))}
-                          {dateKeys.map(date=>{
+                          {dateKeys.map((date,i)=>{
                             const val=byDate[date]
-                            const h=Math.max(4,Math.round((val/maxDay)*116))
-                            const d=new Date(date+'T12:00:00')
-                            const lbl=`${d.getMonth()+1}/${d.getDate()}`
+                            const h=Math.max(6,Math.round((val/maxDay)*106))
+                            const d2=new Date(date+'T12:00:00')
                             return(
                               <div key={date} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',height:'100%',justifyContent:'flex-end',position:'relative',zIndex:1}}>
-                                <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',marginBottom:3}}>{val}</span>
-                                <div style={{width:'100%',height:h,background:'#E84142cc',borderRadius:'3px 3px 0 0',borderTop:'2px solid #E84142'}}/>
-                                <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:4,position:'absolute',bottom:0}}>{lbl}</span>
+                                <span className="fade-up" style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',marginBottom:3,animationDelay:`${i*60}ms`}}>{val}</span>
+                                <div className="bar-grow" style={{width:'68%',height:h,background:'linear-gradient(to top,#E84142,#E84142aa)',borderRadius:'3px 3px 0 0',boxShadow:'0 -2px 8px #E8414230',animationDelay:`${i*60}ms`,transformOrigin:'bottom'}}/>
+                                <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',position:'absolute',bottom:0}}>{`${d2.getMonth()+1}/${d2.getDate()}`}</span>
                               </div>
                             )
                           })}
                         </div>
-                        <div style={{marginTop:10,display:'flex',gap:16,fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',flexWrap:'wrap'}}>
-                          <span>Peak: {Math.max(...dateKeys.map(d=>byDate[d]))}/day</span>
-                          <span>Avg: {Math.round(sent/Math.max(dateKeys.length,1))}/day</span>
-                          <span>Remaining: {leads.filter(l=>l.status==='New'&&l.emailBody&&l.contactEmail).length} queued</span>
+                        <div style={{marginTop:10,display:'flex',gap:16,fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>
+                          <span>Peak <strong>{Math.max(...dateKeys.map(d=>byDate[d]))}</strong>/day</span>
+                          <span>Avg <strong>{Math.round(sent/Math.max(dateKeys.length,1))}</strong>/day</span>
+                          <span><strong>{queued}</strong> queued</span>
                         </div>
-                      </div>
+                      </>
                     )}
-                  </div>
-
-                  {/* LEAD SCORE DISTRIBUTION */}
-                  <div className="card">
-                    <div className="card-hd">
-                      <div className="ct">Lead Score Distribution</div>
-                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>avg {avgScore} · {leads.filter(l=>l.leadScore>60).length} high-fit</span>
-                    </div>
-                    <div style={{paddingTop:4}}>
-                      {sBuckets.map(b=>(
-                        <div key={b.lbl} style={{marginBottom:12}}>
-                          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'center'}}>
-                            <div style={{display:'flex',alignItems:'center',gap:7}}>
-                              <div style={{width:7,height:7,borderRadius:2,background:b.c}}/>
-                              <span style={{fontFamily:'var(--mono)',fontSize:11}}>{b.lbl}</span>
-                            </div>
-                            <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{total>0?Math.round(b.n/total*100):0}{'%'}</span>
-                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:26,textAlign:'right'}}>{b.n}</span>
-                            </div>
-                          </div>
-                          {pBar(maxB>0?Math.round(b.n/maxB*100):0,b.c,12)}
-                        </div>
-                      ))}
-                      <div style={{marginTop:12,padding:'10px 12px',background:'var(--s2)',borderRadius:'var(--r)',border:'1px solid var(--b)',fontFamily:'var(--body)',fontSize:11,color:'var(--ink3)'}}>
-                        High-fit (61+): {leads.filter(l=>l.leadScore>60&&l.contactEmail).length} sendable · prioritize these for personalised follow-up
-                      </div>
-                    </div>
                   </div>
                 </div>
 
-                {/* ── ROW 3: Company types + Pipeline health ── */}
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
-
-                  {/* COMPANY TYPE DONUT */}
-                  <div className="card">
-                    <div className="card-hd"><div className="ct">Company Types</div></div>
-                    <div style={{display:'flex',gap:20,alignItems:'center',paddingTop:4}}>
-                      <svg width={140} height={140} style={{flexShrink:0}}>
-                        <circle cx={70} cy={70} r={52} fill="none" stroke="var(--b2)" strokeWidth={18}/>
-                        {(()=>{
-                          let offset=0
-                          return types.map(([lbl,cnt],i)=>{
-                            const pct=cnt/Math.max(total,1)
-                            const dash=circ*pct
-                            const gap=circ*(1-pct)
-                            const rot=offset*360
-                            offset+=pct
-                            return(
-                              <circle key={lbl} cx={70} cy={70} r={52} fill="none"
-                                stroke={tColors[i%tColors.length]} strokeWidth={18}
-                                strokeDasharray={`${dash} ${gap}`}
-                                strokeDashoffset={-(rot/360)*circ+(circ/4)}/>
-                            )
-                          })
-                        })()}
-                        <text x={70} y={66} textAnchor="middle" fill="var(--ink)" fontSize={22} fontWeight={800} fontFamily="var(--sans)">{total}</text>
-                        <text x={70} y={80} textAnchor="middle" fill="var(--ink4)" fontSize={9} fontFamily="var(--mono)">LEADS</text>
-                      </svg>
-                      <div style={{flex:1}}>
-                        {types.map(([lbl,cnt],i)=>(
-                          <div key={lbl} style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:9}}>
-                            <div style={{display:'flex',alignItems:'center',gap:7}}>
-                              <div style={{width:8,height:8,borderRadius:2,background:tColors[i%tColors.length],flexShrink:0}}/>
-                              <span style={{fontFamily:'var(--body)',fontSize:11}}>{lbl}</span>
+                {/* Conversion Rates + Score + Donut */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:12}}>
+                  <div className="bcell">
+                    <div className="card-hd" style={{marginBottom:14}}><div className="ct">Conversion Rates</div></div>
+                    {[
+                      {lbl:'Lead → Contact',n:withEmail,d:total,   tgt:80, delay:0},
+                      {lbl:'Contact → Sent',n:sent,    d:withEmail,tgt:100,delay:60},
+                      {lbl:'Sent → Opened', n:opened,  d:sent,     tgt:30, delay:120},
+                      {lbl:'Sent → Replied',n:replied, d:sent,     tgt:5,  delay:180},
+                      {lbl:'Reply → Booked',n:booked,  d:replied,  tgt:30, delay:240},
+                    ].map(r=>{
+                      const pct=r.d>0?Math.round(r.n/r.d*100):0
+                      const col=pct>=r.tgt?'#16a34a':pct>=r.tgt*0.5?'#d97706':'#E84142'
+                      return(
+                        <div key={r.lbl} className="fade-up" style={{marginBottom:14,animationDelay:`${r.delay}ms`}}>
+                          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'flex-end'}}>
+                            <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>{r.lbl}</span>
+                            <div style={{display:'flex',alignItems:'baseline',gap:6}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)'}}>{r.n}/{r.d}</span>
+                              <span style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:18,letterSpacing:'-1px',color:col,lineHeight:1}}>{pct}{'%'}</span>
                             </div>
-                            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                          </div>
+                          <ABar pct={Math.min(100,r.tgt>0?Math.round(pct/r.tgt*100):0)} col={col} h={5} delay={r.delay+200}/>
+                          <div style={{fontFamily:'var(--mono)',fontSize:8,color:'var(--ink4)',marginTop:2}}>target {r.tgt}{'%'}</div>
+                        </div>
+                      )
+                    })}
+                    <div style={{marginTop:6,padding:'8px 10px',background:'var(--s2)',borderRadius:'var(--r)',fontFamily:'var(--body)',fontSize:10,color:'var(--ink3)',lineHeight:1.5}}>
+                      2–5% good · 5–10% great · 10%+ exceptional
+                    </div>
+                  </div>
+
+                  <div className="bcell">
+                    <div className="card-hd" style={{marginBottom:14}}>
+                      <div className="ct">Lead Score</div>
+                      <span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)'}}>avg {avgScore}</span>
+                    </div>
+                    {(()=>{
+                      const buckets=[
+                        {lbl:'81–100',n:leads.filter(l=>l.leadScore>80).length,c:'#E84142',d:0},
+                        {lbl:'61–80', n:leads.filter(l=>l.leadScore>60&&l.leadScore<=80).length,c:'#16a34a',d:80},
+                        {lbl:'41–60', n:leads.filter(l=>l.leadScore>40&&l.leadScore<=60).length,c:'#d97706',d:160},
+                        {lbl:'21–40', n:leads.filter(l=>l.leadScore>20&&l.leadScore<=40).length,c:'#2563eb',d:240},
+                        {lbl:'0–20',  n:leads.filter(l=>l.leadScore>=0&&l.leadScore<=20).length,c:'#6b7280',d:320},
+                      ]
+                      const mx=Math.max(...buckets.map(b=>b.n),1)
+                      return buckets.map(b=>(
+                        <div key={b.lbl} className="fade-up" style={{marginBottom:12,animationDelay:`${b.d}ms`}}>
+                          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'center'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:7}}>
+                              <div style={{width:6,height:6,borderRadius:2,background:b.c}}/>
+                              <span style={{fontFamily:'var(--mono)',fontSize:11}}>{b.lbl}</span>
+                            </div>
+                            <div style={{display:'flex',gap:7,alignItems:'center'}}>
+                              <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{total>0?Math.round(b.n/total*100):0}{'%'}</span>
+                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:24,textAlign:'right'}}>{b.n}</span>
+                            </div>
+                          </div>
+                          <ABar pct={mx>0?Math.round(b.n/mx*100):0} col={b.c} h={12} delay={b.d+100}/>
+                        </div>
+                      ))
+                    })()}
+                    <div style={{marginTop:8,padding:'8px 10px',background:'var(--s2)',borderRadius:'var(--r)',fontFamily:'var(--body)',fontSize:10,color:'var(--ink3)'}}>
+                      {leads.filter(l=>l.leadScore>60&&l.contactEmail).length} high-fit leads ready to send
+                    </div>
+                  </div>
+
+                  <div className="bcell">
+                    <div className="card-hd" style={{marginBottom:14}}><div className="ct">Company Types</div></div>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
+                      <svg width={120} height={120} className="count-up">
+                        <circle cx={60} cy={60} r={50} fill="none" stroke="var(--b2)" strokeWidth={14}/>
+                        {(()=>{let offset=0;return types.map(([lbl,cnt],i)=>{
+                          const pct=cnt/Math.max(total,1),dash=circ*pct,gap=circ*(1-pct),rot=offset*360
+                          offset+=pct
+                          return(<circle key={lbl} cx={60} cy={60} r={50} fill="none" stroke={tColors[i%tColors.length]} strokeWidth={14} strokeDasharray={`${dash} ${gap}`} strokeDashoffset={-(rot/360)*circ+(circ/4)} style={{filter:`drop-shadow(0 0 3px ${tColors[i%tColors.length]}50)`}}/>)
+                        })})()}
+                        <text x={60} y={56} textAnchor="middle" fill="var(--ink)" fontSize={18} fontWeight={800} fontFamily="var(--sans)">{total}</text>
+                        <text x={60} y={70} textAnchor="middle" fill="var(--ink4)" fontSize={8} fontFamily="var(--mono)">LEADS</text>
+                      </svg>
+                      <div style={{width:'100%'}}>
+                        {types.map(([lbl,cnt],i)=>(
+                          <div key={lbl} className="fade-up" style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:7,animationDelay:`${i*50}ms`}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6}}>
+                              <div style={{width:7,height:7,borderRadius:2,background:tColors[i%tColors.length]}}/>
+                              <span style={{fontFamily:'var(--body)',fontSize:10}}>{lbl}</span>
+                            </div>
+                            <div style={{display:'flex',gap:6,alignItems:'center'}}>
                               <span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)'}}>{Math.round(cnt/Math.max(total,1)*100)}{'%'}</span>
-                              <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,minWidth:24,textAlign:'right'}}>{cnt}</span>
+                              <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,minWidth:22,textAlign:'right'}}>{cnt}</span>
                             </div>
                           </div>
                         ))}
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* PIPELINE HEALTH */}
-                  <div className="card">
-                    <div className="card-hd"><div className="ct">ICP Breakdown</div></div>
-                    <div style={{paddingTop:4}}>
-                      {[
-                        {lbl:'High-fit (score 61+)',    sub:'Prioritise for manual follow-up',  n:leads.filter(l=>l.leadScore>60&&l.contactEmail&&!l.disqualified).length,   c:'#16a34a'},
-                        {lbl:'Mid-fit (score 21–60)',   sub:'Good for bulk sequences',           n:leads.filter(l=>l.leadScore>20&&l.leadScore<=60&&l.contactEmail&&!l.disqualified).length, c:'#d97706'},
-                        {lbl:'Low signal (0–20)',       sub:'Consider disqualifying',            n:leads.filter(l=>l.leadScore<=20&&!l.disqualified).length,                  c:'#6b7280'},
-                        {lbl:'No contact email',        sub:'Run Hunter enrichment',             n:leads.filter(l=>!l.contactEmail&&!l.disqualified).length,                  c:'#2563eb'},
-                        {lbl:'Bounced',                 sub:'Find replacement email',            n:bounced,                                                                   c:'#E84142'},
-                        {lbl:'Disqualified',            sub:'Removed from pipeline',             n:disq,                                                                      c:'var(--b2)'},
-                      ].map(m=>(
-                        <div key={m.lbl} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:'1px solid var(--b)'}}>
-                          <div>
-                            <div style={{fontFamily:'var(--body)',fontSize:12,fontWeight:600,color:'var(--ink)',marginBottom:1}}>{m.lbl}</div>
-                            <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{m.sub}</div>
-                          </div>
-                          <div style={{fontFamily:'var(--sans)',fontSize:24,fontWeight:800,letterSpacing:'-1px',color:m.c,lineHeight:1,minWidth:36,textAlign:'right'}}>{m.n}</div>
-                        </div>
-                      ))}
+                {/* ICP Breakdown bento */}
+                <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:10}}>
+                  {[
+                    {lbl:'High-Fit',    sub:'Score 61+',        n:leads.filter(l=>l.leadScore>60&&l.contactEmail&&!l.disqualified).length,   c:'#16a34a',action:'Prioritise first'},
+                    {lbl:'Mid-Fit',     sub:'Score 21–60',      n:leads.filter(l=>l.leadScore>20&&l.leadScore<=60&&l.contactEmail&&!l.disqualified).length, c:'#d97706',action:'Bulk sequence'},
+                    {lbl:'Low Signal',  sub:'Score 0–20',       n:leads.filter(l=>l.leadScore<=20&&!l.disqualified).length,c:'#6b7280',action:'Consider disqualify'},
+                    {lbl:'No Email',    sub:'Missing contact',  n:leads.filter(l=>!l.contactEmail&&!l.disqualified).length,c:'#2563eb',action:'Run Hunter'},
+                    {lbl:'Bounced',     sub:'Invalid address',  n:bounced,c:'#E84142',action:'Find replacement'},
+                    {lbl:'Disqualified',sub:'Removed from pipe',n:disq,c:'var(--b2)',action:'Not in pipeline'},
+                  ].map((m,i)=>(
+                    <div key={m.lbl} className="bcell fade-up" style={{padding:'14px 16px',animationDelay:`${i*40}ms`}}>
+                      <div style={{fontFamily:'var(--sans)',fontWeight:800,fontSize:26,letterSpacing:'-1.5px',color:m.c,lineHeight:1,marginBottom:5}}>{m.n}</div>
+                      <div style={{fontFamily:'var(--body)',fontSize:11,fontWeight:600,color:'var(--ink)',marginBottom:2}}>{m.lbl}</div>
+                      <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)',marginBottom:6}}>{m.sub}</div>
+                      <div style={{fontFamily:'var(--mono)',fontSize:8,padding:'2px 7px',borderRadius:8,display:'inline-block',background:'var(--s2)',color:'var(--ink4)'}}>{m.action}</div>
                     </div>
-                  </div>
-
+                  ))}
                 </div>
               </>
             )
           })()}
+
 
         </div>
       </div>
     </>
   )
 }
-
