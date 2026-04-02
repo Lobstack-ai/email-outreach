@@ -3,100 +3,88 @@ import nodemailer from 'nodemailer'
 import { ImapFlow } from 'imapflow'
 import { sendDiscordNotification } from '@/lib/discord'
 
-const BASE   = 'appnF2fNAyEYnscvo'
-const LEADS  = 'tblMgthKziXfnIPBV'
-const LOGID  = 'tbl6olAfEJ479I9oq'
-const AT     = () => process.env.AIRTABLE_API_KEY!
+const BASE  = 'appnF2fNAyEYnscvo'
+const LEADS = `https://api.airtable.com/v0/${BASE}/tblMgthKziXfnIPBV`
+const LOG   = `https://api.airtable.com/v0/${BASE}/tbl6olAfEJ479I9oq`
+const AT    = () => process.env.AIRTABLE_API_KEY!
 
-const FU1_DAYS = 5   // days after cold email before FU1 fires
-const FU2_DAYS = 7   // days after FU1 before FU2 fires
+const FU1_DAYS = 5
+const FU2_DAYS = 7
 
-// ── Airtable helpers ──────────────────────────────────────────────────────────
-async function atGet(path: string) {
-  const r = await fetch(`https://api.airtable.com/v0/${BASE}/${path}`, {
-    headers: { Authorization: `Bearer ${AT()}` },
-  })
-  if (!r.ok) throw new Error(`AT GET ${r.status}`)
-  return r.json()
+async function atGet(url: string)  { return fetch(url, { headers: { Authorization: `Bearer ${AT()}` }, next: { revalidate: 0 } }).then(r => r.json()) }
+async function atPatch(id: string, fields: any) {
+  return fetch(`${LEADS}/${id}`, { method: 'PATCH', headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ fields, typecast: true }) }).then(r => r.json())
+}
+async function atLog(fields: any) {
+  return fetch(LOG, { method: 'POST', headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ records: [{ fields }], typecast: true }) })
 }
 
-async function atPatch(recordId: string, fields: Record<string, any>) {
-  await fetch(`https://api.airtable.com/v0/${BASE}/${LEADS}/${recordId}`, {
-    method: 'PATCH',
-    headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields, typecast: true }),
-  })
-}
-
-async function atLog(fields: Record<string, any>) {
-  await fetch(`https://api.airtable.com/v0/${BASE}/${LOGID}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ records: [{ fields }], typecast: true }),
-  })
-}
-
-// ── Email send ────────────────────────────────────────────────────────────────
 async function sendEmail(to: string, subject: string, body: string, recordId?: string) {
-  const from    = process.env.SMTP_EMAIL!
-  const pass    = process.env.SMTP_PASSWORD!
-  const appUrl  = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  const from   = process.env.SMTP_EMAIL!
+  const pass   = process.env.SMTP_PASSWORD!
+  const appUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : 'https://email-outreach-rosy.vercel.app'
-  const pixel   = recordId
+  const pixel  = recordId
     ? `<img src="${appUrl}/api/track/${recordId}" width="1" height="1" style="display:none" alt=""/>`
     : ''
-
-  const t = nodemailer.createTransport({
-    host: 'mail.privateemail.com', port: 587, secure: false,
-    auth: { user: from, pass },
-    tls: { rejectUnauthorized: false },
-    connectionTimeout: 15000, socketTimeout: 15000,
-  })
+  const t = nodemailer.createTransport({ host: 'mail.privateemail.com', port: 587, secure: false, auth: { user: from, pass }, tls: { rejectUnauthorized: false }, connectionTimeout: 15000, socketTimeout: 15000 })
   await t.verify()
   const info = await t.sendMail({
-    from:    `Brandon @ Lobstack <${from}>`,
-    replyTo: `Brandon @ Lobstack <${from}>`,
-    to, subject,
+    from: `Brandon @ Lobstack <${from}>`, replyTo: `Brandon @ Lobstack <${from}>`, to, subject,
     text: body + '\n\n---\nTo unsubscribe reply with "unsubscribe".',
     html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;max-width:600px">
       ${body.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>').replace(/^/,'<p>').replace(/$/,'</p>')}
-      <p style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999">
-        To unsubscribe, reply with "unsubscribe".</p>${pixel}</div>`,
+      <p style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999">To unsubscribe, reply with "unsubscribe".</p>${pixel}</div>`,
     headers: { 'List-Unsubscribe': `<mailto:${from}?subject=unsubscribe>`, 'Precedence': 'bulk' },
   })
   t.close()
   return info.messageId
 }
 
-// ── IMAP reply checker ────────────────────────────────────────────────────────
-// Connects to PrivateEmail IMAP, reads unseen messages, matches to leads
-// NDR bounce patterns — emails from mail servers reporting delivery failure
-const NDR_SENDERS    = /mailer-daemon|postmaster|mail-delivery|delivery.status|bounce|noreply@.*mail/i
-const NDR_SUBJECTS   = /undeliverable|delivery.fail|returned.mail|delivery.status|bounce|could.not.deliver|non.delivery/i
-const NDR_BODY_ADDRS = /(?:failed recipient|original recipient|final recipient|to:|for)\s*<([^>]+@[^>]+)>/gi
+// ── NDR bounce detection ──────────────────────────────────────────────────────
+const NDR_SENDERS  = /mailer-daemon|postmaster|mail-delivery|delivery.status|bounce|noreply@.*mail/i
+const NDR_SUBJECTS = /undeliverable|delivery.fail|returned.mail|delivery.status|bounce|could.not.deliver|non.delivery|failure.notice/i
+const NDR_BODY_RE  = /(?:failed recipient|original recipient|final recipient|to:|for)\s*<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?/gi
 
-// Extract the original recipient email from an NDR body
 function extractNDRRecipient(text: string): string | null {
-  NDR_BODY_ADDRS.lastIndex = 0
-  const m = NDR_BODY_ADDRS.exec(text)
+  NDR_BODY_RE.lastIndex = 0
+  const m = NDR_BODY_RE.exec(text)
   return m ? m[1].toLowerCase().trim() : null
 }
 
+function extractPlainText(raw: string): string {
+  // Try to get the text/plain MIME part
+  const plainMatch = raw.match(/Content-Type: text\/plain[\s\S]*?\r\n\r\n([\s\S]*?)(?:\r\n--|$)/i)
+  if (plainMatch?.[1]?.trim()) return plainMatch[1].trim().slice(0, 3000)
+  // Strip HTML tags as fallback
+  return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 3000)
+}
+
+// ── IMAP inbox scanner ────────────────────────────────────────────────────────
+// KEY FIX: search ALL recent messages (not just unseen) so webmail-read replies
+// are still detected. Use a date window and match by email domain as fallback.
 async function checkInboxForReplies(
   contactEmails: Set<string>,
   since: Date
-): Promise<{ from: string; subject: string; text: string }[]> {
-  const host    = process.env.SMTP_EMAIL!
-  const pass    = process.env.SMTP_PASSWORD!
-  const replies: { from: string; subject: string; text: string }[] = []
+): Promise<{ from: string; subject: string; text: string; uid: number }[]> {
+  const host = process.env.SMTP_EMAIL!
+  const pass = process.env.SMTP_PASSWORD!
+  const results: { from: string; subject: string; text: string; uid: number }[] = []
+
+  // Build domain lookup too — match by domain if exact email fails
+  const domainToEmails = new Map<string, string[]>()
+  for (const email of Array.from(contactEmails)) {
+    const domain = email.split('@')[1]
+    if (domain) {
+      if (!domainToEmails.has(domain)) domainToEmails.set(domain, [])
+      domainToEmails.get(domain)!.push(email)
+    }
+  }
 
   const client = new ImapFlow({
-    host: 'mail.privateemail.com',
-    port: 993,
-    secure: true,
-    auth: { user: host, pass },
-    logger: false,
+    host: 'mail.privateemail.com', port: 993, secure: true,
+    auth: { user: host, pass }, logger: false,
     tls: { rejectUnauthorized: false },
   })
 
@@ -104,45 +92,59 @@ async function checkInboxForReplies(
     await client.connect()
     await client.mailboxOpen('INBOX')
 
+    // FIXED: search ALL messages (seen + unseen) in the date window
+    // Previously was { seen: false } which missed already-read replies
     const sinceStr     = since.toISOString().split('T')[0]
-    const searchResult = await client.search({ seen: false, since: new Date(sinceStr) })
-    const msgs         = Array.isArray(searchResult) ? searchResult : []
+    const searchResult = await client.search({ since: new Date(sinceStr) })
+    const uids         = Array.isArray(searchResult) ? searchResult : []
 
-    if (msgs.length > 0) {
-      for await (const msg of client.fetch(msgs, { envelope: true, bodyStructure: true, source: true })) {
+    if (uids.length > 0) {
+      for await (const msg of client.fetch(uids, { envelope: true, source: true })) {
         const fromAddr  = msg.envelope?.from?.[0]?.address?.toLowerCase() || ''
+        const fromDomain = fromAddr.split('@')[1] || ''
         const subject   = msg.envelope?.subject || ''
         const raw       = msg.source?.toString() || ''
         const text      = extractPlainText(raw)
+        const uid       = msg.uid || 0
 
         if (!fromAddr) continue
 
-        // ── Normal reply from a lead ──────────────────────────────────────
-        if (contactEmails.has(fromAddr)) {
-          replies.push({ from: fromAddr, subject, text })
-          await client.messageFlagsAdd([msg.seq], ['\\Seen'])
-          continue
-        }
-
-        // ── NDR / bounce from a mail server ──────────────────────────────
+        // ── NDR bounce: check BEFORE reply matching ──────────────────────
         const isNDRSender  = NDR_SENDERS.test(fromAddr)
         const isNDRSubject = NDR_SUBJECTS.test(subject)
 
         if (isNDRSender || isNDRSubject) {
           // Extract who the bounce is about
-          const failedRecipient = extractNDRRecipient(text) ||
-            // Fallback: search body for any known contact email
+          const failedRecipient =
+            extractNDRRecipient(text) ||
+            extractNDRRecipient(raw) ||
             Array.from(contactEmails).find(e => raw.toLowerCase().includes(e))
 
-          if (failedRecipient && contactEmails.has(failedRecipient)) {
-            // Return as a special bounce reply — handled separately in cron
-            replies.push({
-              from:    failedRecipient,
-              subject: subject,
-              text:    `__NDR_BOUNCE__ ${text.slice(0, 500)}`,
-            })
+          if (failedRecipient) {
+            const normalised = failedRecipient.toLowerCase()
+            if (contactEmails.has(normalised)) {
+              results.push({ from: normalised, subject, text: `__NDR_BOUNCE__ ${text.slice(0, 500)}`, uid })
+            }
           }
-          await client.messageFlagsAdd([msg.seq], ['\\Seen'])
+          // Mark seen regardless — don't re-process NDRs
+          try { await client.messageFlagsAdd([msg.seq], ['\\Seen']) } catch {}
+          continue
+        }
+
+        // ── Normal reply: exact email match ─────────────────────────────
+        if (contactEmails.has(fromAddr)) {
+          results.push({ from: fromAddr, subject, text, uid })
+          try { await client.messageFlagsAdd([msg.seq], ['\\Seen']) } catch {}
+          continue
+        }
+
+        // ── Fuzzy match: same domain as a known lead ─────────────────────
+        // Catches replies from aliases, forwarded addresses, etc.
+        const domainMatches = domainToEmails.get(fromDomain) || []
+        if (domainMatches.length === 1) {
+          // Only auto-match if exactly ONE lead from this domain (unambiguous)
+          results.push({ from: domainMatches[0], subject, text, uid })
+          try { await client.messageFlagsAdd([msg.seq], ['\\Seen']) } catch {}
         }
       }
     }
@@ -154,54 +156,30 @@ async function checkInboxForReplies(
     try { await client.logout() } catch {}
   }
 
-  return replies
-}
-
-function extractPlainText(raw: string): string {
-  // Simple extraction: find text/plain section or strip HTML
-  const plainMatch = raw.match(/Content-Type: text\/plain[\s\S]*?\r\n\r\n([\s\S]*?)(?:\r\n--|\r\n\r\nContent-Type:)/i)
-  if (plainMatch) return plainMatch[1].trim()
-
-  // Fallback: strip HTML tags
-  return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000)
+  return results
 }
 
 // ── Claude reply classifier ───────────────────────────────────────────────────
-async function classifyReply(replyText: string, company: string): Promise<{
-  intent: 'interested' | 'unsubscribe' | 'not_now' | 'question' | 'other'
-  summary: string
-  suggestedResponse: string
-}> {
+async function classifyReply(text: string, company: string) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY!,
-      'anthropic-version': '2023-06-01',
-    },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY!, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      system: 'Classify B2B sales email replies and draft short responses. Respond ONLY with valid JSON.',
-      messages: [{ role: 'user', content: `Classify this reply to a cold outreach email from ${company}:
-
-"""
-${replyText.slice(0, 1000)}
-"""
-
-Intent options: "interested" (wants demo/call/more info), "unsubscribe" (remove me/not interested/stop), "not_now" (timing off/busy/later), "question" (specific product question), "other"
-
-Return JSON: {"intent":"...","summary":"one sentence","suggestedResponse":"2-3 sentence reply, never start with I, warm but direct"}` }],
+      model: 'claude-sonnet-4-20250514', max_tokens: 500,
+      system: 'Classify B2B sales email replies. Respond ONLY with valid JSON, no markdown.',
+      messages: [{ role: 'user', content: `Classify this reply to a cold outreach email from ${company}:\n\n"""\n${text.slice(0, 1500)}\n"""\n\nIntent options:\n- "interested": wants demo, call, more info, pricing, availability\n- "unsubscribe": remove me, not interested, stop emailing, opt out\n- "not_now": timing off, busy, come back later, already have solution\n- "question": specific question about product/pricing/features\n- "other": out of office, wrong person, unclear\n\nReturn JSON: {"intent":"...","summary":"one sentence what they said","suggestedResponse":"2-3 sentences, warm and direct, never start with I"}` }],
     }),
   })
   const d = await res.json()
   const raw = d.content?.[0]?.text || ''
-  const match = raw.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
-  if (!match) return { intent: 'other', summary: 'Reply received', suggestedResponse: '' }
-  return JSON.parse(match[0])
+  try {
+    const clean = raw.replace(/```json|```/g, '').trim()
+    const match = clean.match(/\{[\s\S]*\}/)
+    if (match) return JSON.parse(match[0])
+  } catch {}
+  return { intent: 'other', summary: 'Reply received', suggestedResponse: '' }
 }
 
-// ── Days since a date string ──────────────────────────────────────────────────
 function daysSince(dateStr: string): number {
   if (!dateStr) return 0
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
@@ -209,19 +187,19 @@ function daysSince(dateStr: string): number {
 
 // ── Main cron handler ─────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  // Vercel automatically sets the authorization header for cron jobs
-  const auth = req.headers.get('authorization')
-  const secret = process.env.CRON_SECRET
-  if (secret && auth !== `Bearer ${secret}`) {
+  // Auth
+  const authHeader = req.headers.get('authorization') || ''
+  const cronSecret = process.env.CRON_SECRET || ''
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const results = { repliesFound: 0, fu1Sent: 0, fu2Sent: 0, skipped: 0, errors: 0 }
+  const now     = new Date()
+  const results = { repliesFound: 0, bouncesFound: 0, fu1Sent: 0, fu2Sent: 0, skipped: 0, errors: 0 }
   const hotReplies: { company: string; intent: string; email: string }[] = []
-  const now = new Date()
 
   try {
-    // ── 1. Load all active sequence leads from Airtable ──────────────────────
+    // ── 1. Load all leads ─────────────────────────────────────────────────────
     let offset: string | undefined
     const leads: any[] = []
     do {
@@ -230,29 +208,36 @@ export async function GET(req: NextRequest) {
       offset = data.offset
     } while (offset)
 
-    // Build a set of all contact emails we've sent to (for reply matching)
-    const activeLookup = new Map<string, any>() // email → record
+    // Build lookup: email → record (include ALL sent leads, not just unseen)
+    const activeLookup = new Map<string, any>()
     for (const r of leads) {
       const email = r.fields['Contact Email']?.toLowerCase()
       const seq   = r.fields['Sequence Status'] || 'Cold'
+      // Include all leads that have been sent to, even if already replied
+      // (we'll check for duplicates when processing)
       if (email && !['Cold', 'Opted Out'].includes(seq)) {
         activeLookup.set(email, r)
       }
     }
 
-    // ── 2. Check inbox for replies ────────────────────────────────────────────
+    // ── 2. Scan inbox for replies + NDR bounces ───────────────────────────────
     if (activeLookup.size > 0 && process.env.SMTP_EMAIL && process.env.SMTP_PASSWORD) {
-      const since = new Date(now.getTime() - 14 * 86400000) // look back 14 days
+      // Look back 30 days to catch anything missed (was 14 days)
+      const since   = new Date(now.getTime() - 30 * 86400000)
       const replies = await checkInboxForReplies(new Set(activeLookup.keys()), since)
 
-    for (const reply of replies) {
+      for (const reply of replies) {
         const record = activeLookup.get(reply.from.toLowerCase())
         if (!record) continue
 
         const company = record.fields['Company'] || reply.from
+        const curSeq  = record.fields['Sequence Status'] || ''
 
-        // ── Handle NDR bounce ─────────────────────────────────────────────
+        // ── NDR bounce ────────────────────────────────────────────────────
         if (reply.text.startsWith('__NDR_BOUNCE__')) {
+          // Skip if already marked bounced
+          if (record.fields['Bounced']) continue
+
           const bounceReason = reply.text.replace('__NDR_BOUNCE__ ', '').slice(0, 200)
           await atPatch(record.id, {
             'Bounced':         true,
@@ -270,42 +255,41 @@ export async function GET(req: NextRequest) {
             'Result':        'Bounced - NDR',
           })
           sendDiscordNotification({
-            type:          'new_reply',
-            company,
-            contactName:   record.fields['Contact Name'] || '',
-            email:         reply.from,
-            intent:        'unsubscribe',
-            summary:       `⚡ Email bounced — NDR received. Address likely invalid.`,
-            suggestedReply: 'Find a replacement email address for this contact.',
+            type: 'new_reply', company,
+            contactName: record.fields['Contact Name'] || '',
+            email: reply.from, intent: 'unsubscribe',
+            summary: `⚡ Email bounced (NDR). Address likely invalid.`,
+            suggestedReply: 'Find a replacement email address.',
           }).catch(() => {})
           activeLookup.delete(reply.from.toLowerCase())
+          results.bouncesFound++
           results.repliesFound++
           continue
         }
 
+        // ── Skip if already processed this reply ──────────────────────────
+        if (['Replied', 'Booked', 'Opted Out'].includes(curSeq) && record.fields['Reply Text']) {
+          continue
+        }
+
+        // ── Classify normal reply ─────────────────────────────────────────
         const classification = await classifyReply(reply.text, company)
 
         const statusMap: Record<string, string> = {
-          interested:  'Replied',
-          unsubscribe: 'Opted Out',
-          not_now:     'Replied',
-          question:    'Replied',
-          other:       'Replied',
+          interested:  'Replied', unsubscribe: 'Opted Out',
+          not_now:     'Replied', question:    'Replied', other: 'Replied',
         }
 
         await atPatch(record.id, {
           'Status':           statusMap[classification.intent] || 'Replied',
           'Sequence Status':  statusMap[classification.intent] || 'Replied',
           'Last Contacted':   now.toISOString().split('T')[0],
-          // Structured reply fields (used by Inbox tab)
           'Reply Text':       reply.text.slice(0, 5000),
           'Reply Intent':     classification.intent,
           'Suggested Reply':  classification.suggestedResponse,
-          // Also keep in Personalization Notes for backwards compat
           'Personalization Notes':
             `[REPLY ${now.toLocaleDateString()} — ${classification.intent.toUpperCase()}]\n` +
-            `${classification.summary}\n\n` +
-            `Suggested response:\n${classification.suggestedResponse}`,
+            `${classification.summary}\n\nSuggested:\n${classification.suggestedResponse}`,
         })
 
         await atLog({
@@ -320,14 +304,11 @@ export async function GET(req: NextRequest) {
                          : `Replied - ${classification.intent}`,
         })
 
-        // Send immediate Discord alert for each reply
         sendDiscordNotification({
-          type:          'new_reply',
-          company,
-          contactName:   record.fields['Contact Name'] || '',
-          email:         reply.from,
-          intent:        classification.intent,
-          summary:       classification.summary,
+          type: 'new_reply', company,
+          contactName: record.fields['Contact Name'] || '',
+          email: reply.from, intent: classification.intent,
+          summary: classification.summary,
           suggestedReply: classification.suggestedResponse,
         }).catch(() => {})
 
@@ -339,86 +320,77 @@ export async function GET(req: NextRequest) {
 
     // ── 3. Fire follow-up emails ──────────────────────────────────────────────
     for (const record of leads) {
-      const f          = record.fields
-      const seq        = f['Sequence Status'] || 'Cold'
-      const email      = f['Contact Email']
-      const lastDate   = f['Last Contacted']
+      const f   = record.fields
+      const seq = f['Sequence Status'] || 'Cold'
+      const email = f['Contact Email']
 
-      // Skip opted-out, replied, booked, or no email
-      if (['Replied', 'Booked', 'Opted Out'].includes(seq)) { results.skipped++; continue }
-      if (!email) { results.skipped++; continue }
+      if (!email || f['Bounced']) { results.skipped++; continue }
+      if (['Cold', 'Replied', 'Booked', 'Opted Out'].includes(seq)) { results.skipped++; continue }
 
-      // FU1: fires 5 days after cold email
+      const lastDate = f['Last Contacted'] || ''
+
+      // FU1
       if (seq === 'Email 1 Sent' && f['Follow-up 1 Body'] && f['Follow-up 1 Subject']) {
         if (daysSince(lastDate) >= FU1_DAYS) {
           try {
             const msgId = await sendEmail(email, f['Follow-up 1 Subject'], f['Follow-up 1 Body'], record.id)
             await atPatch(record.id, {
-              'Sequence Status': 'Follow-up 1 Sent',
-              'Status':          'Email Sent',
-              'Last Contacted':  now.toISOString().split('T')[0],
-              'Follow Up #':     2,
+              'Sequence Status':  'Follow-up 1 Sent',
+              'Last Contacted':   now.toISOString().split('T')[0],
+              'Follow Up #':      2,
             })
             await atLog({
-              'Campaign ID':   `FU1-${Date.now()}`,
-              'Company':       f['Company'] || '',
-              'Contact Email': email,
-              'Subject':       f['Follow-up 1 Subject'],
-              'Sequence Step': 'Follow-up 1',
-              'Sent At':       now.toISOString(),
-              'Message ID':    msgId,
-              'Result':        'Sent',
+              'Campaign ID':   `FU1-${Date.now()}`, 'Company': f['Company'],
+              'Contact Email': email, 'Subject': f['Follow-up 1 Subject'],
+              'Sequence Step': 'Follow-up 1', 'Sent At': now.toISOString(),
+              'Message ID':    msgId, 'Result': 'Sent',
             })
             results.fu1Sent++
-            await new Promise(r => setTimeout(r, 5000)) // 5s cooldown
           } catch (e: any) {
             console.error(`FU1 error for ${f['Company']}: ${e.message}`)
+            if (/55[0-4]|bounce|undeliver/i.test(e.message)) {
+              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Status': 'New', 'Sequence Status': 'Cold' })
+              results.bouncesFound++
+            }
             results.errors++
           }
-        } else {
-          results.skipped++
-        }
-        continue
+        } else { results.skipped++ }
       }
 
-      // FU2: fires 7 days after FU1
-      if (seq === 'Follow-up 1 Sent' && f['Follow-up 2 Body'] && f['Follow-up 2 Subject']) {
+      // FU2
+      else if (seq === 'Follow-up 1 Sent' && f['Follow-up 2 Body'] && f['Follow-up 2 Subject']) {
         if (daysSince(lastDate) >= FU2_DAYS) {
           try {
             const msgId = await sendEmail(email, f['Follow-up 2 Subject'], f['Follow-up 2 Body'], record.id)
             await atPatch(record.id, {
-              'Sequence Status': 'Follow-up 2 Sent',
-              'Status':          'Email Sent',
-              'Last Contacted':  now.toISOString().split('T')[0],
-              'Follow Up #':     3,
+              'Sequence Status':  'Follow-up 2 Sent',
+              'Last Contacted':   now.toISOString().split('T')[0],
+              'Follow Up #':      3,
             })
             await atLog({
-              'Campaign ID':   `FU2-${Date.now()}`,
-              'Company':       f['Company'] || '',
-              'Contact Email': email,
-              'Subject':       f['Follow-up 2 Subject'],
-              'Sequence Step': 'Follow-up 2',
-              'Sent At':       now.toISOString(),
-              'Message ID':    msgId,
-              'Result':        'Sent',
+              'Campaign ID':   `FU2-${Date.now()}`, 'Company': f['Company'],
+              'Contact Email': email, 'Subject': f['Follow-up 2 Subject'],
+              'Sequence Step': 'Follow-up 2', 'Sent At': now.toISOString(),
+              'Message ID':    msgId, 'Result': 'Sent',
             })
             results.fu2Sent++
-            await new Promise(r => setTimeout(r, 5000))
           } catch (e: any) {
             console.error(`FU2 error for ${f['Company']}: ${e.message}`)
+            if (/55[0-4]|bounce|undeliver/i.test(e.message)) {
+              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Status': 'New', 'Sequence Status': 'Cold' })
+              results.bouncesFound++
+            }
             results.errors++
           }
-        } else {
-          results.skipped++
-        }
+        } else { results.skipped++ }
       }
     }
 
-    // Send Discord cron summary (replaces email summary)
-    const anythingHappened = results.repliesFound > 0 || results.fu1Sent > 0 || results.fu2Sent > 0 || results.errors > 0
+    // ── 4. Discord cron summary ───────────────────────────────────────────────
+    const anythingHappened = results.repliesFound > 0 || results.fu1Sent > 0 || results.fu2Sent > 0 || results.bouncesFound > 0 || results.errors > 0
     if (anythingHappened) {
       sendDiscordNotification({
-        type:         'cron_summary',
+        type: 'cron_summary',
         leadsChecked: leads.length,
         repliesFound: results.repliesFound,
         fu1Sent:      results.fu1Sent,
@@ -428,12 +400,7 @@ export async function GET(req: NextRequest) {
       }).catch(() => {})
     }
 
-    return NextResponse.json({
-      ok: true,
-      timestamp: now.toISOString(),
-      leadsChecked: leads.length,
-      ...results,
-    })
+    return NextResponse.json({ ok: true, timestamp: now.toISOString(), leadsChecked: leads.length, ...results })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 })
   }

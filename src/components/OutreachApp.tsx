@@ -410,6 +410,8 @@ export default function App(){
   const[inboxLead,setInboxLead]=useState<Lead|null>(null)
   const[replyDraft,setReplyDraft]=useState<Record<string,string>>({})
   const[sendingReply,setSendingReply]=useState<string|null>(null)
+  const[scanningInbox,setScanningInbox]=useState(false)
+  const[lastScanResult,setLastScanResult]=useState<any>(null)
   const[validation,setValidation]=useState<any>(null)
   const[validating,setValidating]=useState(false)
   // Dynamic discovery
@@ -440,6 +442,30 @@ export default function App(){
 
   useEffect(()=>{checkHealth()},[])
   useEffect(()=>{if(health?.airtable?.ok)loadLeads(true)},[health?.airtable?.ok])
+
+  const scanInbox = async (days=60) => {
+    setScanningInbox(true)
+    addLog(`=== Scanning inbox — last ${days} days (read + unread) ===`, 'i')
+    try {
+      const r = await fetch('/api/scan-inbox',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({days})
+      }).then(r=>r.json())
+      if(!r.ok) throw new Error(r.error)
+      setLastScanResult(r)
+      addLog(`✓ Scanned ${r.scanned} messages — ${r.newReplies} new replies, ${r.newBounces} bounces detected`,'o')
+      if(r.newReplies>0||r.newBounces>0){
+        toast(`Found ${r.newReplies} repl${r.newReplies===1?'y':'ies'} + ${r.newBounces} bounce${r.newBounces===1?'':'s'}`,'o')
+        await loadLeads()
+      } else {
+        toast('Inbox scanned — nothing new found','w')
+      }
+    }catch(e:any){
+      addLog(`✗ Scan failed: ${e.message}`,'e')
+      toast(e.message,'e')
+    }
+    setScanningInbox(false)
+  }
 
   const checkHealth=async()=>{
     setHL(true)
@@ -986,6 +1012,10 @@ export default function App(){
                     {(needsEmail>0||needsContact>0)&&(
                       <div style={{padding:'10px 24px',borderTop:'1px solid #E8414218',display:'flex',gap:20,flexWrap:'wrap',background:'#E8414205'}}>
                         {needsEmail>0&&<span onClick={()=>setTab('generate')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--yellow)',cursor:'pointer'}}><strong>{needsEmail}</strong> need email written</span>}
+                        {leads.filter(l=>l.bounced).length>0&&<span onClick={()=>{setTab('crm');setCrmFilter('bounced')}} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--red)',cursor:'pointer'}}><strong>{leads.filter(l=>l.bounced).length}</strong> bounced</span>}
+                        {stats.replied>0&&<span onClick={()=>setTab('inbox')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)',cursor:'pointer'}}><strong>{stats.replied}</strong> repl{stats.replied===1?'y':'ies'}</span>}
+                        {leads.filter(l=>l.bounced).length>0&&<span onClick={()=>{setTab('crm');setCrmFilter('bounced')}} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--red)',cursor:'pointer'}}><strong>{leads.filter(l=>l.bounced).length}</strong> bounced</span>}
+                        {leads.filter(l=>l.status==='Replied').length>0&&<span onClick={()=>setTab('inbox')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--green)',cursor:'pointer'}}><strong>{leads.filter(l=>l.status==='Replied').length}</strong> repl{leads.filter(l=>l.status==='Replied').length===1?'y':'ies'}</span>}
                         {needsContact>0&&<span onClick={()=>setTab('crm')} style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',cursor:'pointer'}}><strong>{needsContact}</strong> missing contact</span>}
                       </div>
                     )}
@@ -1079,6 +1109,7 @@ export default function App(){
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:1,background:'var(--b)'}}>
                   {[
                     {ico:'↻',lbl:'Refresh Systems',act:checkHealth,dis:hl},
+                    {ico:'📬',lbl:'Scan Inbox',act:()=>scanInbox(60),dis:scanningInbox,prime:false},
                     {ico:'⭐',lbl:'Discover Leads',act:()=>setTab('scrape'),dis:false},
                     {ico:'✦',lbl:'Generate Emails',act:()=>setTab('generate'),dis:!health?.env?.anthropic},
                     {ico:'▶',lbl:'Send Campaign',act:()=>setTab('send'),dis:readyCnt===0,prime:readyCnt>0},
@@ -1725,7 +1756,12 @@ export default function App(){
                             {detailLead.lastOpened&&<span style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink4)'}}>{detailLead.lastOpened}</span>}
                           </div>
                         )}
-                        {detailLead.bounced&&<div style={{marginTop:4,fontFamily:'var(--mono)',fontSize:10,color:'var(--red)'}}>⚡ Email bounced — invalid address</div>}
+                        {detailLead.bounced&&(
+                          <div style={{marginTop:6,padding:'8px 10px',background:'#E8414210',borderRadius:'var(--r)',border:'1px solid #E8414230'}}>
+                            <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--red)',fontWeight:600,marginBottom:2}}>⚡ Email bounced</div>
+                            {detailLead.bounceReason&&<div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--ink3)',marginTop:2}}>{detailLead.bounceReason.slice(0,120)}</div>}
+                          </div>
+                        )}
                         {detailLead.website&&<a href={detailLead.website.startsWith('http')?detailLead.website:`https://${detailLead.website}`} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink3)',textDecoration:'none'}}>{detailLead.website.replace(/^https?:\/\//,'')}</a>}
                         {detailLead.githubOrgUrl&&<div style={{marginTop:4}}><a href={detailLead.githubOrgUrl} target="_blank" rel="noopener noreferrer" style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)',textDecoration:'none'}}>github.com/{detailLead.githubOrgUrl.split('/').pop()}</a></div>}
                       </div>
@@ -2242,8 +2278,20 @@ export default function App(){
             return(
               <>
                 <div className="ph">
-                  <div className="ph-t">Inbox</div>
-                  <div className="ph-s">Replies detected by IMAP · Claude classifies intent · reply in one click</div>
+                  <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',flexWrap:'wrap',gap:10}}>
+                    <div>
+                      <div className="ph-t">Inbox</div>
+                      <div className="ph-s">Replies + bounces detected by IMAP · Claude classifies intent · reply in one click</div>
+                    </div>
+                    <div style={{display:'flex',gap:8,alignItems:'center',flexShrink:0}}>
+                      {lastScanResult&&<span style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--ink4)'}}>
+                        Last scan: {lastScanResult.scanned} msgs · {lastScanResult.newReplies} replies · {lastScanResult.newBounces} bounces
+                      </span>}
+                      <button className="btn btn-dark" onClick={()=>scanInbox(60)} disabled={scanningInbox}>
+                        {scanningInbox?'Scanning...':'📬 Scan Inbox Now'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {replied.length===0?(
