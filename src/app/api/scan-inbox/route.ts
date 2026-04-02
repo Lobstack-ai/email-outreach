@@ -1,5 +1,5 @@
-// Manual inbox scan — scans ALL messages (read + unread), full 60-day lookback
-// Classifies replies with Claude, writes to Airtable, marks bounces
+// Manual inbox scan — split into fast IMAP fetch + async Airtable writes
+// Avoids Vercel 60s timeout by streaming writes as we go, not batching at end
 import { NextRequest, NextResponse } from 'next/server'
 import { ImapFlow } from 'imapflow'
 
@@ -19,11 +19,12 @@ function extractNDRRecipient(text: string): string | null {
 }
 
 function extractPlainText(raw: string): string {
+  // Try text/plain MIME part first
   const m = raw.match(/Content-Type: text\/plain[\s\S]*?\r\n\r\n([\s\S]*?)(?:\r\n--|$)/i)
-  if (m?.[1]?.trim()) return m[1].trim().slice(0, 3000)
-  // Try quoted-printable decode for =XX sequences
-  const decoded = raw.replace(/=\r\n/g,'').replace(/=([0-9A-F]{2})/gi,(_,h)=>String.fromCharCode(parseInt(h,16)))
-  return decoded.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,3000)
+  let text = m?.[1]?.trim() || raw.replace(/<[^>]+>/g, ' ').trim()
+  // Decode quoted-printable (=XX sequences, soft line breaks)
+  text = text.replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+  return text.replace(/\s+/g, ' ').trim().slice(0, 3000)
 }
 
 async function classifyReply(text: string, company: string) {
@@ -32,15 +33,16 @@ async function classifyReply(text: string, company: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY!, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514', max_tokens: 500,
-        system: 'Classify B2B sales email replies. Respond ONLY with valid JSON, no markdown.',
-        messages: [{ role: 'user', content: `Classify this reply to a cold outreach email from ${company}:\n\n"""\n${text.slice(0,1500)}\n"""\n\nIntent:\n- "interested": wants demo, call, pricing, more info\n- "unsubscribe": remove me, not interested, stop\n- "not_now": bad timing, busy, come back later\n- "question": specific product question\n- "other": OOO, wrong person, unclear\n\nReturn JSON: {"intent":"...","summary":"one sentence","suggestedResponse":"2-3 sentences, warm, never start with I"}` }],
+        model: 'claude-sonnet-4-20250514', max_tokens: 400,
+        system: 'Classify B2B sales email replies. Respond ONLY with valid JSON.',
+        messages: [{ role: 'user', content: `Classify reply to cold outreach from ${company}:\n\n"${text.slice(0, 800)}"\n\nIntent: "interested"|"unsubscribe"|"not_now"|"question"|"other"\n\nJSON: {"intent":"...","summary":"one sentence","suggestedResponse":"2-3 sentences, never start with I"}` }],
       }),
+      signal: AbortSignal.timeout(12000),
     })
-    const d   = await res.json()
+    const d = await res.json()
     const raw = d.content?.[0]?.text || ''
-    const m   = raw.replace(/```json|```/g,'').trim().match(/\{[\s\S]*\}/)
-    if (m) return JSON.parse(m[0])
+    const match = raw.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
+    if (match) return JSON.parse(match[0])
   } catch {}
   return { intent: 'other', summary: 'Reply received', suggestedResponse: '' }
 }
@@ -50,6 +52,7 @@ async function atPatch(id: string, fields: any) {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields, typecast: true }),
+    signal: AbortSignal.timeout(8000),
   })
 }
 
@@ -58,14 +61,16 @@ async function atLog(fields: any) {
     method: 'POST',
     headers: { Authorization: `Bearer ${AT()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ records: [{ fields }], typecast: true }),
+    signal: AbortSignal.timeout(8000),
   })
 }
 
 export async function POST(req: NextRequest) {
-  const { days = 60 } = await req.json().catch(() => ({}))
+  const { days = 45 } = await req.json().catch(() => ({}))
+  const now = new Date()
 
   try {
-    // Load all sent leads
+    // ── 1. Load leads (fast) ──────────────────────────────────────────────────
     let offset: string | undefined
     const leads: any[] = []
     do {
@@ -95,12 +100,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── 2. IMAP fetch — collect all messages first, then close connection ──────
     const host = process.env.SMTP_EMAIL!
     const pass = process.env.SMTP_PASSWORD!
-    const now  = new Date()
-
-    const processed: { type: string; company: string; email: string; subject: string; intent?: string; preview: string }[] = []
-    let newReplies = 0, newBounces = 0
+    const inbox: { fromAddr: string; fromDomain: string; subject: string; text: string; seq: number }[] = []
 
     const client = new ImapFlow({
       host: 'mail.privateemail.com', port: 993, secure: true,
@@ -109,9 +112,8 @@ export async function POST(req: NextRequest) {
 
     await client.connect()
     await client.mailboxOpen('INBOX')
-
     const since  = new Date(Date.now() - days * 86400000)
-    const uids   = await client.search({ since })
+    const uids   = await client.search({ since })  // ALL messages, read + unread
     const msgList = Array.isArray(uids) ? uids : []
 
     for await (const msg of client.fetch(msgList, { envelope: true, source: true })) {
@@ -120,106 +122,98 @@ export async function POST(req: NextRequest) {
       const subject    = msg.envelope?.subject || ''
       const raw        = msg.source?.toString() || ''
       const text       = extractPlainText(raw)
+      if (fromAddr) inbox.push({ fromAddr, fromDomain, subject, text, seq: msg.seq || 0 })
+    }
 
-      if (!fromAddr) continue
+    // Mark all matched messages as Seen before closing
+    // (done after processing below)
+    await client.mailboxClose()
+    await client.logout()
+
+    // ── 3. Process each message — write to Airtable as we go ─────────────────
+    const processed: { type: string; company: string; email: string; intent?: string; preview: string }[] = []
+    let newReplies = 0, newBounces = 0
+    const seqsToMark: number[] = []
+
+    for (const msg of inbox) {
+      const { fromAddr, fromDomain, subject, text } = msg
 
       // ── NDR bounce ──────────────────────────────────────────────────────
       if (NDR_SENDERS.test(fromAddr) || NDR_SUBJECTS.test(subject)) {
-        const failed = extractNDRRecipient(text) || extractNDRRecipient(raw) ||
-          Array.from(contactEmails).find(e => raw.toLowerCase().includes(e))
+        const failed = extractNDRRecipient(text) ||
+          Array.from(contactEmails).find(e => text.toLowerCase().includes(e))
         if (failed && contactEmails.has(failed)) {
           const r = emailToRecord.get(failed)
           if (r && !r.fields['Bounced']) {
             await atPatch(r.id, {
-              'Bounced':         true,
-              'Bounce Reason':   text.slice(0, 200),
-              'Bounce Date':     now.toISOString().split('T')[0],
-              'Status':          'New',
-              'Sequence Status': 'Cold',
+              'Bounced': true, 'Bounce Reason': text.slice(0, 200),
+              'Bounce Date': now.toISOString().split('T')[0],
+              'Status': 'New', 'Sequence Status': 'Cold',
             })
             await atLog({
-              'Campaign ID':   `BOUNCE-SCAN-${Date.now()}`,
-              'Company':       r.fields['Company'] || failed,
-              'Contact Email': failed,
-              'Subject':       subject,
-              'Sequence Step': 'Bounce',
-              'Sent At':       now.toISOString(),
-              'Result':        'Bounced - NDR (found by inbox scan)',
+              'Campaign ID': `BOUNCE-SCAN-${Date.now()}`,
+              'Company': r.fields['Company'] || failed, 'Contact Email': failed,
+              'Subject': subject, 'Sequence Step': 'Bounce',
+              'Sent At': now.toISOString(), 'Result': 'Bounced - NDR (inbox scan)',
             })
-            processed.push({ type: 'bounce', company: r.fields['Company'] || failed, email: failed, subject, preview: text.slice(0, 100) })
+            processed.push({ type: 'bounce', company: r.fields['Company'] || failed, email: failed, preview: text.slice(0, 100) })
             newBounces++
+            seqsToMark.push(msg.seq)
           }
         }
-        try { await client.messageFlagsAdd([msg.seq], ['\\Seen']) } catch {}
         continue
       }
 
-      // ── Normal reply: exact match ────────────────────────────────────
+      // ── Reply — exact or domain-fuzzy match ──────────────────────────
       let matchedEmail = contactEmails.has(fromAddr) ? fromAddr : null
-
-      // Fuzzy: same domain, single lead
       if (!matchedEmail) {
         const dm = domainToEmails.get(fromDomain) || []
-        if (dm.length === 1) matchedEmail = dm[0]
+        if (dm.length === 1) matchedEmail = dm[0]  // unambiguous domain match
       }
-
       if (!matchedEmail) continue
 
       const r = emailToRecord.get(matchedEmail)
       if (!r) continue
+      if (r.fields['Reply Text']) continue  // already processed
 
-      // Skip if already has reply text (already processed)
-      if (r.fields['Reply Text']) continue
-
-      const company = r.fields['Company'] || matchedEmail
+      const company        = r.fields['Company'] || matchedEmail
       const classification = await classifyReply(text, company)
 
-      const statusMap: Record<string,string> = {
+      const statusMap: Record<string, string> = {
         interested: 'Replied', unsubscribe: 'Opted Out',
         not_now: 'Replied', question: 'Replied', other: 'Replied',
       }
 
       await atPatch(r.id, {
-        'Status':           statusMap[classification.intent] || 'Replied',
-        'Sequence Status':  statusMap[classification.intent] || 'Replied',
-        'Last Contacted':   now.toISOString().split('T')[0],
-        'Reply Text':       text.slice(0, 5000),
-        'Reply Date':       now.toISOString().split('T')[0],
-        'Reply Intent':     classification.intent,
-        'Suggested Reply':  classification.suggestedResponse,
+        'Status':          statusMap[classification.intent] || 'Replied',
+        'Sequence Status': statusMap[classification.intent] || 'Replied',
+        'Reply Text':      text.slice(0, 5000),
+        'Reply Date':      now.toISOString().split('T')[0],
+        'Reply Intent':    classification.intent,
+        'Suggested Reply': classification.suggestedResponse,
         'Personalization Notes':
           `[REPLY ${now.toLocaleDateString()} — ${classification.intent.toUpperCase()}]\n` +
           `${classification.summary}\n\nSuggested:\n${classification.suggestedResponse}`,
       })
 
       await atLog({
-        'Campaign ID':   `REPLY-SCAN-${Date.now()}`,
-        'Company':       company,
-        'Contact Email': matchedEmail,
-        'Subject':       `REPLY: ${subject}`,
-        'Sequence Step': `Reply (${classification.intent})`,
-        'Sent At':       now.toISOString(),
-        'Result':        classification.intent === 'interested' ? 'Replied - Interested'
-                       : classification.intent === 'unsubscribe' ? 'Unsubscribed'
-                       : `Replied - ${classification.intent}`,
+        'Campaign ID': `REPLY-SCAN-${Date.now()}`,
+        'Company': company, 'Contact Email': matchedEmail,
+        'Subject': `REPLY: ${subject}`, 'Sequence Step': `Reply (${classification.intent})`,
+        'Sent At': now.toISOString(),
+        'Result': classification.intent === 'interested' ? 'Replied - Interested'
+                : classification.intent === 'unsubscribe' ? 'Unsubscribed'
+                : `Replied - ${classification.intent}`,
       })
 
-      try { await client.messageFlagsAdd([msg.seq], ['\\Seen']) } catch {}
-
-      processed.push({ type: 'reply', company, email: matchedEmail, subject, intent: classification.intent, preview: text.slice(0, 120) })
+      processed.push({ type: 'reply', company, email: matchedEmail, intent: classification.intent, preview: text.slice(0, 120) })
       newReplies++
+      seqsToMark.push(msg.seq)
     }
 
-    await client.mailboxClose()
-    await client.logout()
-
     return NextResponse.json({
-      ok: true,
-      scanned:    msgList.length,
-      found:      processed.length,
-      newReplies,
-      newBounces,
-      details:    processed,
+      ok: true, scanned: msgList.length,
+      found: processed.length, newReplies, newBounces, details: processed,
     })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 })
