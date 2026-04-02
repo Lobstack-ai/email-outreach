@@ -43,7 +43,7 @@ type Lead={
   // Reply fields
   replyText:string; replyIntent:string; suggestedReply:string; replySent:boolean;
   // Tracking + ICP
-  openCount:number; lastOpened:string; bounced:boolean; disqualified:boolean; emailVerified:boolean; bounceReason:string;
+  openCount:number; lastOpened:string; bounced:boolean; disqualified:boolean; emailVerified:boolean; bounceReason:string; bounceDate:string; replyDate:string;
 }
 type Log={t:string;msg:string;type:'i'|'o'|'w'|'e'}
 
@@ -101,6 +101,8 @@ function mapRecord(r:any):Lead{
     disqualified:   !!(f['Disqualified']),
     emailVerified:  !!(f['Email Verified']),
     bounceReason:   g('Bounce Reason'),
+    bounceDate:     g('Bounce Date'),
+    replyDate:      g('Reply Date'),
   }
 }
 

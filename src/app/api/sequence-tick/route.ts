@@ -242,6 +242,7 @@ export async function GET(req: NextRequest) {
           await atPatch(record.id, {
             'Bounced':         true,
             'Bounce Reason':   bounceReason,
+            'Bounce Date':     now.toISOString().split('T')[0],
             'Status':          'New',
             'Sequence Status': 'Cold',
           })
@@ -285,6 +286,7 @@ export async function GET(req: NextRequest) {
           'Sequence Status':  statusMap[classification.intent] || 'Replied',
           'Last Contacted':   now.toISOString().split('T')[0],
           'Reply Text':       reply.text.slice(0, 5000),
+          'Reply Date':       now.toISOString().split('T')[0],
           'Reply Intent':     classification.intent,
           'Suggested Reply':  classification.suggestedResponse,
           'Personalization Notes':
@@ -349,7 +351,7 @@ export async function GET(req: NextRequest) {
           } catch (e: any) {
             console.error(`FU1 error for ${f['Company']}: ${e.message}`)
             if (/55[0-4]|bounce|undeliver/i.test(e.message)) {
-              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Status': 'New', 'Sequence Status': 'Cold' })
+              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Bounce Date': now.toISOString().split('T')[0], 'Status': 'New', 'Sequence Status': 'Cold' })
               results.bouncesFound++
             }
             results.errors++
@@ -377,7 +379,7 @@ export async function GET(req: NextRequest) {
           } catch (e: any) {
             console.error(`FU2 error for ${f['Company']}: ${e.message}`)
             if (/55[0-4]|bounce|undeliver/i.test(e.message)) {
-              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Status': 'New', 'Sequence Status': 'Cold' })
+              await atPatch(record.id, { 'Bounced': true, 'Bounce Reason': e.message.slice(0, 200), 'Bounce Date': now.toISOString().split('T')[0], 'Status': 'New', 'Sequence Status': 'Cold' })
               results.bouncesFound++
             }
             results.errors++
